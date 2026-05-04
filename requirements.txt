@@ -1,0 +1,15 @@
+# Zerino unified requirements
+
+# Capture / clip_engine
+ffmpeg-python==0.2.0
+watchdog==6.0.0
+keyboard==0.13.5
+
+# Publishing / posting_system
+zernio-sdk==1.3.68
+python-dotenv==1.2.2
+requests>=2.31.0
+
+# Phase 1+ (planned)
+# pynput              # global hotkey listener (Phase 1)
+# faster-whisper      # captions for horizontal video processor (Phase 1)

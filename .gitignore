@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual env
+venv/
+
+# Environment / secrets
+.env
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Project data
+logs/
+zerino.db
+zerino.db-journal
+zerino.db-wal
+zerino.db-shm
+
+# Recording / clip / render output (user content, large binaries)
+recordings/*
+!recordings/.gitkeep
+clips/*
+!clips/.gitkeep
+renders/**/*
+!renders/**/.gitkeep
+content/*
+!content/.gitkeep
+
+# Old code (kept locally for verification window only — do not commit)
+_old_clip_engine/
+_old_posting_system/
+_old_Queue/
