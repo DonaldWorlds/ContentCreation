@@ -1,8 +1,13 @@
-"""Vertical (9:16) processor for short-form video: TikTok, Reels, Shorts.
+"""Vertical (9:16) processor for short-form video: TikTok, YouTube Shorts, Reels.
 
-Delegates to the existing ExportGenerator which preserves the
-quality-critical ffmpeg settings (lanczos scaler, CRF 20, preset slow,
-golden_zone center_bias 0.42) — see memory: zerino_quality_critical_code.md.
+Always generates Whisper captions (model `small`). Burn-or-fallback strategy:
+- If ffmpeg has libass: subs are burned into the video; SRT sidecar is removed.
+- If not: video is rendered without burning + SRT sidecar is kept.
+  A clear warning is logged ("brew reinstall ffmpeg" to enable burning).
+
+Delegates the underlying ffmpeg to ExportGenerator, which preserves the
+quality-critical settings (lanczos / CRF 20 / preset slow / golden_zone 0.42).
+See memory: zerino_quality_critical_code.md.
 """
 
 from __future__ import annotations
@@ -11,6 +16,10 @@ from pathlib import Path
 
 from zerino.config import get_logger
 from zerino.ffmpeg.export_generator import ExportGenerator
+from zerino.processors._captions import (
+    has_subtitles_filter,
+    transcribe_to_srt,
+)
 from zerino.processors.base import Processor, ProcessorResult
 
 VERTICAL_PLATFORMS = ("tiktok", "youtube_shorts", "instagram_reels")
@@ -36,9 +45,31 @@ class VerticalProcessor(Processor):
             )
 
         output_path = output_dir / f"{input_path.stem}__{platform}.mp4"
+        srt_path = output_dir / f"{input_path.stem}__{platform}.srt"
 
         self.log.info("vertical render start: %s -> %s (platform=%s)", input_path.name, output_path.name, platform)
-        self.generator.run_export(str(input_path), str(output_path), platform=platform)
-        self.log.info("vertical render done: %s", output_path)
 
-        return ProcessorResult(output_path=output_path, metadata={"platform": platform})
+        segment_count = transcribe_to_srt(input_path, srt_path)
+
+        sidecars: dict[str, Path] = {}
+        if has_subtitles_filter():
+            self.log.info("burning captions into video (libass available)")
+            self.generator.run_export(
+                str(input_path), str(output_path),
+                platform=platform, subtitles_path=str(srt_path),
+            )
+            srt_path.unlink(missing_ok=True)
+        else:
+            self.log.warning(
+                "libass missing — rendering without burned-in captions; "
+                "SRT sidecar kept. Run `brew reinstall ffmpeg` to enable burning."
+            )
+            self.generator.run_export(str(input_path), str(output_path), platform=platform)
+            sidecars["srt"] = srt_path
+
+        self.log.info("vertical render done: %s", output_path)
+        return ProcessorResult(
+            output_path=output_path,
+            sidecars=sidecars,
+            metadata={"platform": platform, "segment_count": segment_count},
+        )

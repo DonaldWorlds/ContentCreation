@@ -1,11 +1,11 @@
-"""Image processor: thumbnails and carousels for Pinterest / Instagram feed.
+"""Image processor: Pinterest pins.
 
-Pulls one or more frames from a clip and resizes them to platform spec.
-- Pinterest: 1000x1500 (2:3 pin)
-- Instagram feed: 1080x1080 (1:1)
+Pulls one or more frames from a clip and resizes them to Pinterest pin
+spec (1000x1500). A "carousel" is N frames extracted at evenly-spaced
+timestamps across the clip; each is center-cropped + Lanczos-resized.
 
-A "carousel" is N frames extracted at evenly-spaced timestamps across the clip.
-Each frame is resized + center-cropped to the platform canvas.
+Instagram feed (1080x1080) was dropped per v1 scope: Instagram in this
+project = Reels (vertical video), not images.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from zerino.config import get_logger
 from zerino.ffmpeg.ffmpeg_utils import probe_metadata
 from zerino.processors.base import Processor, ProcessorResult
 
-IMAGE_PLATFORMS = ("pinterest", "instagram_feed")
+IMAGE_PLATFORMS = ("pinterest",)
 DEFAULT_CAROUSEL_COUNT = 3
 
 

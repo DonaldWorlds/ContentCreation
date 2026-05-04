@@ -51,20 +51,23 @@ class ExportGenerator:
 
         return f"scale={target_width}:{target_height}:flags={scaler},setsar=1,fps={fps}"
     
-    def run_export(self, input_path, output_path, platform="tiktok", style="talking_head"):
+    def run_export(self, input_path, output_path, platform="tiktok", style="talking_head", subtitles_path=None):
         input_path = Path(input_path)
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not input_path.exists():
-            raise FileNotFoundError(f"Input file not found: (input_path)")
-        
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
         metadata = probe_metadata(input_path)
 
         config = build_processing_config(metadata, platform=platform, style=style)
         vf = self.build_filter(metadata, config)
 
-     
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            vf = f"{vf},{subtitles_filter(Path(subtitles_path))}"
+
         command = [
             "ffmpeg",
             "-y",

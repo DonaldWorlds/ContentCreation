@@ -1,67 +1,31 @@
-"""Horizontal (16:9) processor for long-form video: YouTube, Twitter.
+"""Horizontal (16:9) processor — Twitter only.
 
-Whisper transcription is mandatory for this posting type:
-- YouTube: SRT sidecar (caption=youtube_srt mode)
-- Twitter: burned-in subtitles (caption=burned mode) — REQUIRES ffmpeg with libass
+YouTube long-form was dropped per v1 scope: long-form lives in a separate
+project. Only Twitter remains as a 16:9 target.
 
-Whisper model: `small` (~500MB), per locked v1 decisions.
+Always generates Whisper captions (model `small`). Burn-or-fallback strategy:
+- If ffmpeg has libass: captions are burned in; SRT sidecar removed.
+- If not: video rendered without burning, SRT sidecar kept; warns to
+  `brew reinstall ffmpeg`. (Previously this path raised — now it produces
+  the video so the user has something to upload.)
 """
 
 from __future__ import annotations
 
-import json
-import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from zerino.composition.composition_rules import build_processing_config
 from zerino.config import get_logger
 from zerino.ffmpeg.ffmpeg_utils import probe_metadata
+from zerino.processors._captions import (
+    has_subtitles_filter,
+    subtitles_filter,
+    transcribe_to_srt,
+)
 from zerino.processors.base import Processor, ProcessorResult
 
-HORIZONTAL_PLATFORMS = ("youtube", "twitter")
-WHISPER_MODEL_SIZE = "small"
-
-
-@dataclass
-class _Segment:
-    start: float
-    end: float
-    text: str
-
-
-def _format_timestamp(seconds: float) -> str:
-    ms = int(round(seconds * 1000))
-    h, ms = divmod(ms, 3_600_000)
-    m, ms = divmod(ms, 60_000)
-    s, ms = divmod(ms, 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-
-def _segments_to_srt(segments: Iterable[_Segment]) -> str:
-    lines: list[str] = []
-    for i, seg in enumerate(segments, start=1):
-        lines.append(str(i))
-        lines.append(f"{_format_timestamp(seg.start)} --> {_format_timestamp(seg.end)}")
-        lines.append(seg.text.strip())
-        lines.append("")
-    return "\n".join(lines)
-
-
-def _ffmpeg_has_subtitles_filter() -> bool:
-    """Probe ffmpeg for the libass-backed `subtitles` filter."""
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-h", "filter=subtitles"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return "Unknown filter" not in (result.stdout + result.stderr)
+HORIZONTAL_PLATFORMS = ("twitter",)
 
 
 class HorizontalProcessor(Processor):
@@ -69,26 +33,8 @@ class HorizontalProcessor(Processor):
 
     def __init__(self):
         self.log = get_logger("zerino.processors.horizontal")
-        self._whisper_model = None  # lazy-load on first use
 
-    def _get_whisper(self):
-        if self._whisper_model is None:
-            from faster_whisper import WhisperModel
-            self.log.info("loading faster-whisper model size=%s (first run downloads ~500MB)", WHISPER_MODEL_SIZE)
-            self._whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
-        return self._whisper_model
-
-    def transcribe(self, input_path: Path) -> list[_Segment]:
-        model = self._get_whisper()
-        self.log.info("transcribing %s", input_path.name)
-        segments_iter, info = model.transcribe(str(input_path), beam_size=5)
-        out: list[_Segment] = []
-        for seg in segments_iter:
-            out.append(_Segment(start=seg.start, end=seg.end, text=seg.text))
-        self.log.info("transcribed %d segments (lang=%s)", len(out), info.language)
-        return out
-
-    def _render_video(self, input_path: Path, output_path: Path, platform: str, burn_subs_from: Path | None = None) -> None:
+    def _render_video(self, input_path: Path, output_path: Path, platform: str, burn_subs_from: Path | None) -> None:
         metadata = probe_metadata(input_path)
         config = build_processing_config(metadata, platform=platform, style="default")
 
@@ -103,11 +49,8 @@ class HorizontalProcessor(Processor):
             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,"
             f"setsar=1,fps={fps}"
         )
-
         if burn_subs_from is not None:
-            # libass `subtitles=` filter; path must be escaped for ffmpeg's filter syntax
-            srt_escaped = str(burn_subs_from).replace(":", r"\:").replace(",", r"\,").replace("'", r"\'")
-            vf_chain = f"{vf_chain},subtitles='{srt_escaped}'"
+            vf_chain = f"{vf_chain},{subtitles_filter(burn_subs_from)}"
 
         cmd = [
             "ffmpeg", "-y",
@@ -143,30 +86,24 @@ class HorizontalProcessor(Processor):
 
         self.log.info("horizontal render start: %s -> %s (platform=%s)", input_path.name, output_path.name, platform)
 
-        segments = self.transcribe(input_path)
-        srt_text = _segments_to_srt(segments)
-        srt_path.write_text(srt_text, encoding="utf-8")
-        self.log.info("wrote SRT sidecar: %s", srt_path)
+        segment_count = transcribe_to_srt(input_path, srt_path)
 
         sidecars: dict[str, Path] = {}
-
-        if platform == "youtube":
-            # SRT sidecar; no burning
+        if has_subtitles_filter():
+            self.log.info("burning captions into video (libass available)")
+            self._render_video(input_path, output_path, platform=platform, burn_subs_from=srt_path)
+            srt_path.unlink(missing_ok=True)
+        else:
+            self.log.warning(
+                "libass missing — rendering without burned-in captions; "
+                "SRT sidecar kept. Run `brew reinstall ffmpeg` to enable burning."
+            )
             self._render_video(input_path, output_path, platform=platform, burn_subs_from=None)
             sidecars["srt"] = srt_path
-        elif platform == "twitter":
-            if not _ffmpeg_has_subtitles_filter():
-                raise RuntimeError(
-                    "Twitter requires burned-in subtitles, but the installed ffmpeg has no `subtitles` "
-                    "filter (libass missing). Run `brew reinstall ffmpeg` and try again."
-                )
-            self._render_video(input_path, output_path, platform=platform, burn_subs_from=srt_path)
-            # SRT was used to burn subs; drop it from sidecars (Twitter doesn't need a separate file)
-            srt_path.unlink(missing_ok=True)
 
         self.log.info("horizontal render done: %s", output_path)
         return ProcessorResult(
             output_path=output_path,
             sidecars=sidecars,
-            metadata={"platform": platform, "segment_count": len(segments)},
+            metadata={"platform": platform, "segment_count": segment_count},
         )
