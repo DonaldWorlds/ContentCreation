@@ -1,40 +1,30 @@
-"""Router: given a clip and a list of (posting_type, platform) targets,
-dispatch each target to the right processor.
+"""Router: given a clip and a list of platforms, dispatch each to the right
+processor.
 
-Posting type → platforms:
-  vertical   → tiktok, youtube_shorts, instagram_reels
-  horizontal → youtube, twitter
-  image      → pinterest, instagram_feed
+v1 has two processors:
+  vertical → tiktok, youtube_shorts, instagram_reels, twitter   (1080x1920)
+  image    → pinterest                                          (1000x1500)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from zerino.config import RENDERS_DIR, get_logger
 from zerino.processors.base import ProcessorResult
-from zerino.processors.horizontal import HorizontalProcessor, HORIZONTAL_PLATFORMS
 from zerino.processors.image import ImageProcessor, IMAGE_PLATFORMS
 from zerino.processors.vertical import VerticalProcessor, VERTICAL_PLATFORMS
 
 PLATFORM_TO_TYPE: dict[str, str] = {
     **{p: "vertical" for p in VERTICAL_PLATFORMS},
-    **{p: "horizontal" for p in HORIZONTAL_PLATFORMS},
     **{p: "image" for p in IMAGE_PLATFORMS},
 }
-
-
-@dataclass
-class Target:
-    platform: str  # e.g. "tiktok", "youtube", "pinterest"
 
 
 class Router:
     def __init__(self):
         self.log = get_logger("zerino.router")
         self._vertical: VerticalProcessor | None = None
-        self._horizontal: HorizontalProcessor | None = None
         self._image: ImageProcessor | None = None
 
     def _processor_for(self, platform: str):
@@ -45,9 +35,6 @@ class Router:
         if ptype == "vertical":
             self._vertical = self._vertical or VerticalProcessor()
             return self._vertical, ptype
-        if ptype == "horizontal":
-            self._horizontal = self._horizontal or HorizontalProcessor()
-            return self._horizontal, ptype
         if ptype == "image":
             self._image = self._image or ImageProcessor()
             return self._image, ptype

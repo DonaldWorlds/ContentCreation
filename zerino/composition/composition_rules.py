@@ -4,7 +4,7 @@ def get_platform_preset(platform: str) -> dict:
     Example: canvas size, aspect ratio, and quality-related defaults.
     """
     presets = {
-        # 9:16 short-form vertical
+        # 9:16 short-form vertical (the only video format in v1)
         "tiktok": {
             "canvas_width": 1080,
             "canvas_height": 1920,
@@ -23,13 +23,11 @@ def get_platform_preset(platform: str) -> dict:
             "aspect_ratio": "9:16",
             "safe_area": {"top": 140, "bottom": 280},
         },
-
-        # 16:9 horizontal (Twitter only — YouTube long-form is in another project)
         "twitter": {
-            "canvas_width": 1280,
-            "canvas_height": 720,
-            "aspect_ratio": "16:9",
-            "safe_area": {"top": 40, "bottom": 40},
+            "canvas_width": 1080,
+            "canvas_height": 1920,
+            "aspect_ratio": "9:16",
+            "safe_area": {"top": 120, "bottom": 260},
         },
 
         # 2:3 image (Pinterest pin)
