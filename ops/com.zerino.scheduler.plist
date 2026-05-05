@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Zerino batch scheduler — keeps posts flowing even after reboot.
+         Install with:
+             cp ops/com.zerino.scheduler.plist ~/Library/LaunchAgents/
+             launchctl load ~/Library/LaunchAgents/com.zerino.scheduler.plist
+
+         Status / stop / start:
+             launchctl list | grep zerino
+             launchctl unload ~/Library/LaunchAgents/com.zerino.scheduler.plist
+             launchctl load   ~/Library/LaunchAgents/com.zerino.scheduler.plist
+    -->
+    <key>Label</key>
+    <string>com.zerino.scheduler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/donaldk/Desktop/Content_Business/venv/bin/python</string>
+        <string>-m</string>
+        <string>zerino.publishing.batch.scheduler_runner</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/donaldk/Desktop/Content_Business</string>
+
+    <!-- Start on login and re-launch if the process exits for any reason -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restarts so a tight crash loop doesn't burn CPU -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Log scheduler stdout/stderr to project logs/ for easy tailing -->
+    <key>StandardOutPath</key>
+    <string>/Users/donaldk/Desktop/Content_Business/logs/scheduler.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/donaldk/Desktop/Content_Business/logs/scheduler.stderr.log</string>
+</dict>
+</plist>

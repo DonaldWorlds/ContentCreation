@@ -1,20 +1,21 @@
+from pathlib import Path
+
 from zerino.db.repositories.clip_repository import ClipRepository
 from zerino.db.repositories.marker_repository import MarkerRepository
 from zerino.db.repositories.recording_repository import RecordingRepository
 from zerino.ffmpeg.clip_generator import ClipGeneratorProcess
-from zerino.capture.services.export_service import ExportService
+from zerino.publishing.clip_to_posts import queue_clips_for_posting
 
 
 class ClipService:
     CLIP_DURATION = 30
     PRE_BUFFER = 10
 
-    def __init__(self, clip_repo=None, marker_repo=None,export_service=None, recording_repo=None, generator=None):
+    def __init__(self, clip_repo=None, marker_repo=None, recording_repo=None, generator=None):
         self.clip_repo = clip_repo or ClipRepository()
         self.marker_repo = marker_repo or MarkerRepository()
         self.recording_repo = recording_repo or RecordingRepository()
         self.generator = generator or ClipGeneratorProcess()
-        self.export_service = export_service or ExportService()
 
     def process_single_marker(self, marker):
         marker_time = marker["timestamp"]
@@ -44,8 +45,8 @@ class ClipService:
             print(f"Recording not found: {recording_id}")
             return
 
-        created_count = 0
         video_file = recording["filename"]
+        clip_specs: list[tuple[int, Path]] = []
 
         for window in windows:
             marker_id = window["marker_id"]
@@ -71,10 +72,14 @@ class ClipService:
                 end=end,
             )
             self.clip_repo.mark_completed(clip_id, output_path)
-            self.export_service.process_exports_for_clip(clip_id)
-            created_count += 1
+            clip_specs.append((clip_id, Path(output_path)))
 
-        print(f"Created {created_count} clips for recording {recording_id}")
+        print(f"Created {len(clip_specs)} clips for recording {recording_id}")
+
+        # Hand the batch off to the publishing bridge:
+        # first clip posts immediately, the rest are scheduled +120 min apart.
+        if clip_specs:
+            queue_clips_for_posting(clip_specs)
 
         
 
