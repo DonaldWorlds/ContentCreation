@@ -36,3 +36,6 @@ content/*
 _old_clip_engine/
 _old_posting_system/
 _old_Queue/
+
+# Caption iteration scratch — large test renders, not source
+caption_tests/

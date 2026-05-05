@@ -1,55 +1,73 @@
+"""
+Batch scheduler daemon — Phase 2 + Phase 3.
+
+Polls the posts table for pending rows and dispatches them to Zernio.
+Implements:
+  - Exponential backoff retry (Phase 3)
+  - Per-platform rate limiting (Phase 3)
+  - Heartbeat log every 60 s so you can detect a dead daemon (Phase 3)
+
+Run:
+    python -m zerino.publishing.batch.scheduler_runner
+"""
 from __future__ import annotations
 
-import json
-import logging
 import time
-from dataclasses import asdict
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta, timezone
 
-from zerino.publishing.scheduled_events import SqliteScheduledStore
-from zerino.publishing.job_events import JobEventStore
-from zerino.publishing.publish_job import PublishJob
+from zerino.config import DB_PATH, get_logger
+from zerino.db.repositories.posts_repository import (
+    claim_due_posts,
+    mark_published,
+    record_failure,
+)
+from zerino.publishing.zernio.poster import dispatch_post
 
-from zerino.publishing.batch.zernio_publisher import publish_scheduled_job
+log = get_logger("zerino.publishing.scheduler")
 
-logger = logging.getLogger(__name__)
+# Phase 3: minimum seconds between consecutive posts to the same platform
+PLATFORM_RATE_LIMITS: dict[str, float] = {
+    "tiktok": 10.0,
+    "youtube_shorts": 10.0,
+    "instagram_reels": 10.0,
+    "twitter": 5.0,
+    "pinterest": 5.0,
+}
+_DEFAULT_RATE_LIMIT = 10.0
+
+# Phase 3: exponential backoff — delay = BASE * 2^(attempts-1), capped at 1 hour
+_RETRY_BASE_SECONDS = 60.0
+_RETRY_CAP_SECONDS = 3600.0
+
+_HEARTBEAT_INTERVAL = 60.0  # seconds between heartbeat log lines
 
 
-def _extract_post_id(create_result: Any) -> str | None:
-    # same best-effort logic
-    if isinstance(create_result, dict):
-        return (
-            create_result.get("id")
-            or create_result.get("postId")
-            or create_result.get("field_id")
-            or create_result.get("data", {}).get("id")
-            or create_result.get("data", {}).get("field_id")
-        )
-    return None
-
-def _job_from_payload(payload: dict[str, Any]) -> PublishJob:
-    allowed = set(PublishJob.__annotations__.keys())
-    cleaned = {k: v for k, v in payload.items() if k in allowed}
-    return PublishJob(**cleaned)
+def _next_retry_at(attempts: int) -> str:
+    delay = min(_RETRY_BASE_SECONDS * (2 ** (attempts - 1)), _RETRY_CAP_SECONDS)
+    return (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
 
 
 def run_scheduler_loop(
     *,
-    db_path: str = "jobs.sqlite3",
     poll_seconds: float = 5.0,
     claim_limit: int = 20,
 ) -> None:
-    scheduled_store = SqliteScheduledStore(db_path=db_path)
-    events = JobEventStore(db_path=db_path)
+    log.info("Scheduler started. db=%s poll=%.1fs", DB_PATH, poll_seconds)
 
-    logger.info("Scheduler runner started. db=%s poll=%.1fs", db_path, poll_seconds)
+    _platform_last_sent: dict[str, float] = {}
+    _last_heartbeat = time.monotonic()
 
     while True:
+        # Phase 3: heartbeat
+        now_mono = time.monotonic()
+        if now_mono - _last_heartbeat >= _HEARTBEAT_INTERVAL:
+            log.info("heartbeat: scheduler alive")
+            _last_heartbeat = now_mono
+
         try:
-            due = scheduled_store.claim_due_jobs(limit=claim_limit)
+            due = claim_due_posts(limit=claim_limit)
         except Exception:
-            logger.exception("Failed to claim due jobs")
+            log.exception("Failed to claim due posts from DB")
             time.sleep(poll_seconds)
             continue
 
@@ -57,36 +75,57 @@ def run_scheduler_loop(
             time.sleep(poll_seconds)
             continue
 
-        logger.info("Claimed %d due job(s)", len(due))
+        log.info("Claimed %d post(s) for dispatch", len(due))
 
         for row in due:
-            job_id = row.id
+            post_id: int = row["id"]
+            platform: str = row["platform"]
+            attempts: int = row["attempts"]
+            max_attempts: int = row["max_attempts"]
+
+            # Phase 3: rate limiting — enforce minimum gap between posts per platform
+            min_interval = PLATFORM_RATE_LIMITS.get(platform, _DEFAULT_RATE_LIMIT)
+            elapsed = time.monotonic() - _platform_last_sent.get(platform, 0.0)
+            if elapsed < min_interval:
+                wait = min_interval - elapsed
+                log.debug("rate-limit: waiting %.1fs before next %s post", wait, platform)
+                time.sleep(wait)
+
             try:
-                scheduled_store.mark_processing(job_id)
-                events.log_job_event(job_id, "processing", "scheduler_runner: marked processing")
-
-                job = _job_from_payload(row.payload)
-
-                result = publish_scheduled_job(job)
-                # result can be dict or list[dict]; normalize to first
-                first = result[0] if isinstance(result, list) and result else result
-
-                post_id = _extract_post_id(first)
-                if not post_id:
-                    raise RuntimeError(f"No post id returned from Zernio create. result={first}")
-
-                scheduled_store.mark_submitted(job_id, post_id)
-                events.log_job_event(job_id, "submitted", f"zernio_post_id={post_id}")
+                zernio_post_id = dispatch_post(row)
+                mark_published(post_id, zernio_post_id)
+                _platform_last_sent[platform] = time.monotonic()
+                log.info(
+                    "published post id=%d platform=%s zernio_post_id=%s",
+                    post_id, platform, zernio_post_id,
+                )
 
             except Exception as e:
-                logger.exception("Job %s failed", job_id)
-                scheduled_store.mark_failed(job_id, str(e))
-                events.log_job_event(job_id, "failed", str(e))
+                new_attempts = attempts + 1
+                log.exception(
+                    "post id=%d failed (attempt %d/%d): %s",
+                    post_id, new_attempts, max_attempts, e,
+                )
 
-        # small delay so we don't spin hard if many jobs are due
+                if new_attempts >= max_attempts:
+                    # permanent failure — no more retries
+                    record_failure(post_id, str(e), retry_at=None)
+                    log.warning(
+                        "post id=%d permanently failed after %d attempts",
+                        post_id, new_attempts,
+                    )
+                else:
+                    # Phase 3: schedule retry with exponential backoff
+                    retry_at = _next_retry_at(new_attempts)
+                    record_failure(post_id, str(e), retry_at=retry_at)
+                    log.info(
+                        "post id=%d will retry at %s (attempt %d/%d)",
+                        post_id, retry_at, new_attempts, max_attempts,
+                    )
+
+        # small yield so we don't spin immediately when many jobs are due
         time.sleep(0.1)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    run_scheduler_loop(db_path="jobs.sqlite3", poll_seconds=5.0, claim_limit=20)
+    run_scheduler_loop(poll_seconds=5.0, claim_limit=20)

@@ -135,6 +135,60 @@ def create_database():
     """)
 
 
+    # ACCOUNTS — one row per connected social account
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform TEXT NOT NULL,
+        handle TEXT NOT NULL,
+        zernio_account_id TEXT NOT NULL UNIQUE,
+        profile_id TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """)
+
+    cursor.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_platform_handle
+    ON accounts(platform, handle)
+    """)
+
+    # POSTS — one row per (clip, platform, account) fan-out unit
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS posts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        clip_id INTEGER,
+        platform TEXT NOT NULL,
+        account_id INTEGER NOT NULL,
+        render_path TEXT NOT NULL,
+        caption TEXT,
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending','processing','published','failed','cancelled')),
+        mode TEXT NOT NULL DEFAULT 'manual'
+            CHECK(mode IN ('manual','scheduled')),
+        scheduled_for TEXT,
+        zernio_post_id TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        next_retry_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY(clip_id) REFERENCES clips(id) ON DELETE SET NULL,
+        FOREIGN KEY(account_id) REFERENCES accounts(id)
+    )
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_posts_status_due
+    ON posts(status, scheduled_for, next_retry_at)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_posts_clip_id
+    ON posts(clip_id)
+    """)
+
     conn.commit()
     conn.close()
 

@@ -4,6 +4,18 @@ from pathlib import Path
 from zerino.ffmpeg.ffmpeg_utils import probe_metadata
 from zerino.composition.composition_rules import build_processing_config
 
+# --- Quality tuning (Phase 2.5) ---------------------------------------------
+# Subtle color/contrast bump — makes flat stream captures pop without looking
+# filtered. Applied at the very start of the video filter chain.
+COLOR_FILTER = "eq=contrast=1.05:saturation=1.1:gamma=0.97"
+
+# TikTok / Instagram target loudness. Raw stream audio is typically ~-20 LUFS,
+# so without normalization clips sound quieter than the feed and get scrolled.
+LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
+
+AUDIO_FADE_IN_SEC = 0.15   # 150 ms — kills the hard-cut audio pop on entry
+AUDIO_FADE_OUT_SEC = 0.20  # 200 ms — gentle tail-out
+
 
 class ExportGenerator:
 
@@ -37,6 +49,7 @@ class ExportGenerator:
                 y = max(0, (input_height - crop_h) // 2)
 
             return (
+                f"{COLOR_FILTER},"
                 f"crop={crop_w}:{crop_h}:{x}:{y},"
                 f"scale={target_width}:{target_height}:flags={scaler},"
                 f"setsar=1,fps={fps}"
@@ -44,13 +57,31 @@ class ExportGenerator:
 
         if mode == "pad":
             return (
+                f"{COLOR_FILTER},"
                 f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease:flags={scaler},"
                 f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black,"
                 f"setsar=1,fps={fps}"
             )
 
-        return f"scale={target_width}:{target_height}:flags={scaler},setsar=1,fps={fps}"
-    
+        return (
+            f"{COLOR_FILTER},"
+            f"scale={target_width}:{target_height}:flags={scaler},"
+            f"setsar=1,fps={fps}"
+        )
+
+    def build_audio_filter(self, duration: float | None) -> str:
+        """Audio chain: loudness normalize to TikTok/IG target, then fade
+        in 150 ms and fade out 200 ms before EOF.
+        """
+        parts = [
+            LOUDNORM_FILTER,
+            f"afade=t=in:st=0:d={AUDIO_FADE_IN_SEC}",
+        ]
+        if duration is not None and duration > AUDIO_FADE_OUT_SEC + 0.1:
+            fade_out_st = max(0.0, duration - AUDIO_FADE_OUT_SEC)
+            parts.append(f"afade=t=out:st={fade_out_st:.3f}:d={AUDIO_FADE_OUT_SEC}")
+        return ",".join(parts)
+
     def run_export(self, input_path, output_path, platform="tiktok", style="talking_head", subtitles_path=None):
         input_path = Path(input_path)
         output_path = Path(output_path)
@@ -66,13 +97,17 @@ class ExportGenerator:
 
         if subtitles_path is not None:
             from zerino.processors._captions import subtitles_filter
+            # Burn captions LAST so they aren't tinted by the eq color bump.
             vf = f"{vf},{subtitles_filter(Path(subtitles_path))}"
+
+        af = self.build_audio_filter(metadata.get("duration"))
 
         command = [
             "ffmpeg",
             "-y",
             "-i", str(input_path),
             "-vf", vf,
+            "-af", af,
             "-c:v", "libx264",
             "-preset", config.get("preset", "slow"),
             "-crf", str(config.get("crf", 20)),

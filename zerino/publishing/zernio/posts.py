@@ -15,9 +15,13 @@ def _validate_account_id(account_id: str) -> None:
 
 
 def _extract_post_id(result: Any) -> str | None:
-    """
-    Try common shapes. Adjust if your Zernio SDK returns a different structure.
-    """
+    # SDK Pydantic PostCreateResponse: result.post.field_id
+    post_obj = getattr(result, "post", None)
+    if post_obj is not None:
+        pid = getattr(post_obj, "field_id", None) or getattr(post_obj, "id", None)
+        if pid:
+            return str(pid)
+
     if isinstance(result, dict):
         return (
             result.get("id")
