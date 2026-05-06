@@ -32,6 +32,7 @@ from watchdog.observers import Observer
 from zerino.capture.handlers.recording_handler_worker import RecordingHandler
 from zerino.capture.services.clip_service import ClipService
 from zerino.capture.services.marker_service import MarkerService
+from zerino.capture.services.queue_service import PipelineQueueService
 from zerino.capture.services.recording_service import RecordingService
 from zerino.capture.workers.clip_worker import ClipWorker
 from zerino.capture.workers.marker_worker import MarkerIngestWorker
@@ -73,8 +74,16 @@ def main() -> None:
         "current_streamer_id": streamer_id,
     }
 
+    # CRITICAL: ONE queue shared between the recording service (producer)
+    # and the clip worker (consumer). PipelineQueueService default-constructs
+    # a new in-memory queue per instance, so without this both halves would
+    # talk to separate queues and recording_finished events would be lost.
+    queue_service = PipelineQueueService(state=state, lock=lock)
+
     # --- Recording watchdog ---------------------------------------------- #
-    recording_service = RecordingService(state, lock=lock)
+    recording_service = RecordingService(
+        state, lock=lock, pipeline_queue_service=queue_service,
+    )
     handler = RecordingHandler(state=state, recording_service=recording_service)
     observer = Observer()
     observer.schedule(handler, path=str(RECORDINGS_DIR), recursive=False)
@@ -89,7 +98,9 @@ def main() -> None:
 
     # --- Clip worker (queue consumer) ------------------------------------ #
     clip_service = ClipService()
-    clip_worker = ClipWorker(clip_service=clip_service)
+    clip_worker = ClipWorker(
+        clip_service=clip_service, pipeline_queue_service=queue_service,
+    )
     threading.Thread(target=clip_worker.run, daemon=True, name="clip-worker").start()
     log.info("clip worker: ready")
 
