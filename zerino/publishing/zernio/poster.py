@@ -14,6 +14,7 @@ Internal platform names → Zernio platform identifiers:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from zerino.publishing.zernio.media import upload_media
@@ -47,14 +48,19 @@ def dispatch_post(post_row: dict[str, Any]) -> str:
     )
     media_url = upload_media(render_path)
 
+    # Zernio creates a DRAFT (not a live post) if `scheduled_for` is missing.
+    # When the row has no scheduled_for it means "post immediately" — so we
+    # send "now" as the time and Zernio publishes right away.
+    if not scheduled_for:
+        scheduled_for = datetime.now(timezone.utc).isoformat()
+
     payload: dict[str, Any] = {
         "content": caption,
         "platforms": [{"platform": zernio_platform, "accountId": zernio_account_id}],
         "media_items": [{"url": media_url, "type": media_type}],
+        "scheduled_for": scheduled_for,
+        "timezone": "UTC",
     }
-    if scheduled_for:
-        payload["scheduled_for"] = scheduled_for
-        payload["timezone"] = "UTC"
 
     result = create_or_schedule_post(payload)
     post_id = _extract_post_id(result)
