@@ -22,6 +22,7 @@ from pathlib import Path
 
 from zerino.config import get_logger
 from zerino.db.repositories.accounts_repository import list_all_accounts
+from zerino.db.repositories.captions_repository import pick_random_caption
 from zerino.publishing.pipeline import process_and_queue
 
 DEFAULT_INTERVAL_MINUTES = 120  # 2 hours between scheduled clips
@@ -37,7 +38,7 @@ def _platforms_with_accounts() -> list[str]:
 def queue_clips_for_posting(
     clip_specs: list[tuple[int, Path]],
     *,
-    caption: str = "",
+    caption: str | None = None,
     interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
     platforms: list[str] | None = None,
 ) -> list[int]:
@@ -47,7 +48,8 @@ def queue_clips_for_posting(
         clip_specs: list of (clip_id, output_path) in the order they should
             be posted. The first one goes immediately, the rest are spaced
             `interval_minutes` apart.
-        caption: post text (same for all clips for now).
+        caption: explicit post text. If None or empty, each clip pulls a
+            different random caption from the captions pool.
         interval_minutes: gap between scheduled clips. Default 120 (2 hours).
         platforms: explicit platform list, or None to use every platform
             with a registered active account.
@@ -85,15 +87,27 @@ def queue_clips_for_posting(
             mode = "scheduled"
             when = scheduled_for.isoformat()
 
+        # Each clip pulls its OWN random caption from the pool — different
+        # clips in the same batch get different captions. If `caption` was
+        # passed explicitly, use that for every clip instead.
+        chosen_caption = caption if caption else pick_random_caption()
+        if not chosen_caption:
+            log.warning(
+                "clip_to_posts: caption pool empty — clip_id=%d will post with no body. "
+                "Add captions: python -m zerino.cli.captions add ...",
+                clip_id,
+            )
+
         log.info(
-            "clip_to_posts: clip_id=%d (idx=%d) -> %s (mode=%s)",
+            "clip_to_posts: clip_id=%d (idx=%d) -> %s (mode=%s) caption=%r",
             clip_id, index, when, mode,
+            chosen_caption[:60] + "…" if len(chosen_caption) > 60 else chosen_caption,
         )
 
         post_ids = process_and_queue(
             input_path=clip_path,
             platforms=platforms,
-            caption=caption,
+            caption=chosen_caption,
             mode=mode,
             scheduled_for=scheduled_for,
             clip_id=clip_id,

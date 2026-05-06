@@ -189,6 +189,23 @@ def create_database():
     ON posts(clip_id)
     """)
 
+    # CAPTIONS POOL — random rotation source for auto-posted clips
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS captions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT NOT NULL,
+        hashtags TEXT,
+        weight INTEGER NOT NULL DEFAULT 1,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_captions_active
+    ON captions(active)
+    """)
+
     conn.commit()
     conn.close()
 
