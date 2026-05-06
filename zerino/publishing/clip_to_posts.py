@@ -77,15 +77,26 @@ def queue_clips_for_posting(
     now = datetime.now(timezone.utc)
     all_post_ids: list[int] = []
 
+    print()
+    print(f"=== Posting schedule for {len(clip_specs)} clip(s) ===")
+
     for index, (clip_id, clip_path) in enumerate(clip_specs):
         if index == 0:
             scheduled_for = None
             mode = "manual"
-            when = "immediate"
+            when_short = "POSTING NOW"
+            when_full = "immediate"
         else:
             scheduled_for = now + timedelta(minutes=index * interval_minutes)
+            hours = int(index * interval_minutes // 60)
+            mins = int(index * interval_minutes % 60)
+            offset = (
+                f"in {hours}h {mins:02d}m" if hours else f"in {mins} min"
+            )
+            local_time = scheduled_for.astimezone()
+            when_short = f"scheduled for {local_time:%a %b %d, %I:%M %p %Z} ({offset})"
+            when_full = scheduled_for.isoformat()
             mode = "scheduled"
-            when = scheduled_for.isoformat()
 
         # Each clip pulls its OWN random caption from the pool — different
         # clips in the same batch get different captions. If `caption` was
@@ -98,10 +109,15 @@ def queue_clips_for_posting(
                 clip_id,
             )
 
+        # Console line — prominent, easy to read at a glance during a stream
+        print(f"  Clip {index + 1}: {when_short}")
+        print(f"          file: {clip_path.name}")
+        print(f"          text: {chosen_caption.splitlines()[0] if chosen_caption else '(no caption — pool is empty)'}")
+
+        # Structured log line — same info but for logs/zerino.log
         log.info(
-            "clip_to_posts: clip_id=%d (idx=%d) -> %s (mode=%s) caption=%r",
-            clip_id, index, when, mode,
-            chosen_caption[:60] + "…" if len(chosen_caption) > 60 else chosen_caption,
+            "clip_to_posts: clip_id=%d (idx=%d) -> %s (mode=%s)",
+            clip_id, index, when_full, mode,
         )
 
         post_ids = process_and_queue(
@@ -114,6 +130,8 @@ def queue_clips_for_posting(
         )
         all_post_ids.extend(post_ids)
 
+    print(f"=== Queued {len(all_post_ids)} post row(s); scheduler will dispatch when due ===")
+    print()
     log.info(
         "clip_to_posts: queued %d post(s) across %d clip(s)",
         len(all_post_ids), len(clip_specs),
