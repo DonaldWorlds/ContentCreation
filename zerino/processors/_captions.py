@@ -197,6 +197,16 @@ def subtitles_filter(subtitle_path: Path) -> str:
     """Return the ffmpeg `-vf`-compatible filter snippet for an .ass (or .srt)
     subtitle file. The .ass file already contains all styling, so no
     `force_style` is needed.
+
+    Windows note: ffmpeg's filter parser interprets backslashes in the path
+    as escape sequences and silently drops them — e.g. `C:\\Users\\...`
+    becomes `C:Users...` and ffmpeg "cannot find the file." The fix is to
+    normalize to forward slashes; Windows ffmpeg accepts those just fine
+    and the parser leaves them alone.
     """
-    escaped = str(subtitle_path).replace(":", r"\:").replace(",", r"\,").replace("'", r"\'")
+    # 1. Backslashes → forward slashes (Windows path safety)
+    path_str = str(subtitle_path).replace("\\", "/")
+    # 2. Escape colons (drive letter on Windows, etc.) and the punctuation
+    #    that has meaning inside the single-quoted filter argument
+    escaped = path_str.replace(":", r"\:").replace(",", r"\,").replace("'", r"\'")
     return f"subtitles='{escaped}':original_size={PLAY_RES_X}x{PLAY_RES_Y}"
