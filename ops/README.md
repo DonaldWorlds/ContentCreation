@@ -1,5 +1,45 @@
 # Zernio operations
 
+## Run the system end-to-end
+
+There are TWO long-running processes you need running for the auto-flow:
+
+```bash
+# Terminal 1 — capture daemon (watches recordings/, listens for F8, cuts clips)
+python -m zerino.capture.main
+
+# Terminal 2 — scheduler daemon (dispatches due posts to Zernio)
+python -m zerino.publishing.batch.scheduler_runner
+```
+
+Or install the scheduler as a launchd / Task Scheduler service so it stays
+alive across reboots — see below. The capture daemon you typically only
+run while you're streaming.
+
+### One-time setup before your first stream
+```bash
+python -m zerino.db.migrate                                              # init DB
+python -m zerino.cli.add_account add --platform twitter \                 # register account
+       --handle @yourhandle --zernio-account-id <24-char-id>
+python -m zerino.cli.captions add "Wait for it 👀" --hashtags "#cod"     # seed pool
+python -m zerino.cli.captions add "Banger play 🔥" --hashtags "#warzone" --weight 3
+# ... add 10–20 captions
+```
+
+### Live workflow
+1. Start `zerino.capture.main` in a terminal (leave it running).
+2. Start `zerino.publishing.batch.scheduler_runner` in another terminal
+   (or have it launchd-managed — see below).
+3. Start your OBS recording (writes to `recordings/`).
+4. Press **F8** every time you want a clip-cut point.
+5. Stop the OBS recording.
+6. Watchdog detects the file stops growing → clip worker cuts every clip
+   → captions pool feeds each one a random caption → first clip posts
+   immediately, the rest are scheduled +120 min apart.
+7. Scheduler dispatches them on time.
+
+---
+
 ## Auto-start the batch scheduler (macOS)
 
 The scheduler picks up due posts and dispatches them to Zernio every 5 seconds.
