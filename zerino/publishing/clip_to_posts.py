@@ -23,7 +23,7 @@ from pathlib import Path
 from zerino.config import get_logger
 from zerino.db.repositories.accounts_repository import list_all_accounts
 from zerino.db.repositories.captions_repository import pick_random_caption
-from zerino.publishing.pipeline import process_and_queue
+from zerino.publishing.pipeline import dispatch_post_ids, process_and_queue
 
 DEFAULT_INTERVAL_MINUTES = 120  # 2 hours between scheduled clips
 
@@ -82,7 +82,11 @@ def queue_clips_for_posting(
 
     for index, (clip_id, clip_path) in enumerate(clip_specs):
         if index == 0:
-            scheduled_for = None
+            # Clip 1: send Zernio a "scheduled_for" of slightly-in-the-past so
+            # Zernio's dispatcher publishes it on its very next pass. (Sending
+            # exact-now sometimes lands a millisecond in the future after
+            # network latency, leaving it briefly in SCHEDULED state.)
+            scheduled_for = now - timedelta(seconds=30)
             mode = "manual"
             when_short = "POSTING NOW"
             when_full = "immediate"
@@ -130,7 +134,13 @@ def queue_clips_for_posting(
         )
         all_post_ids.extend(post_ids)
 
-    print(f"=== Queued {len(all_post_ids)} post row(s); scheduler will dispatch when due ===")
+        # Send to Zernio NOW. Zernio uses each post's `scheduled_for` to
+        # decide publish-immediately vs save-as-scheduled — so all posts,
+        # including the future-scheduled ones, appear in the Zernio
+        # dashboard right away instead of waiting on our local scheduler.
+        dispatch_post_ids(post_ids)
+
+    print(f"=== {len(all_post_ids)} post(s) sent to Zernio. Check your Zernio dashboard. ===")
     print()
     log.info(
         "clip_to_posts: queued %d post(s) across %d clip(s)",

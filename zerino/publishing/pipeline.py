@@ -7,12 +7,18 @@ the posts table as the handoff point.
 """
 from __future__ import annotations
 
-from datetime import datetime
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from zerino.config import get_logger
+from zerino.config import DB_PATH, get_logger
 from zerino.db.repositories.accounts_repository import get_accounts_for_platform
-from zerino.db.repositories.posts_repository import create_post
+from zerino.db.repositories.posts_repository import (
+    create_post,
+    mark_published,
+    record_failure,
+)
+from zerino.publishing.zernio.poster import dispatch_post
 from zerino.router import Router
 
 log = get_logger("zerino.publishing.pipeline")
@@ -68,3 +74,55 @@ def process_and_queue(
             )
 
     return post_ids
+
+
+def dispatch_post_ids(post_ids: list[int]) -> None:
+    """Send each post row to Zernio right now.
+
+    Each row's `scheduled_for` (which the row already has, set by the caller)
+    is forwarded to Zernio. Zernio then decides whether to publish
+    immediately (if scheduled_for is at-or-before now) or schedule it (if
+    in the future). Either way the post appears in the Zernio dashboard
+    as soon as this function returns — no waiting on the local scheduler.
+
+    On failure, the post is marked pending with a 60 s retry, so the
+    scheduler daemon will pick it up as a fallback.
+    """
+    if not post_ids:
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    try:
+        for pid in post_ids:
+            row = conn.execute(
+                """SELECT p.*, a.zernio_account_id, a.profile_id
+                   FROM posts p
+                   JOIN accounts a ON a.id = p.account_id
+                   WHERE p.id = ?""",
+                (pid,),
+            ).fetchone()
+
+            if row is None:
+                log.warning("dispatch: post id=%d not found in DB — skipping", pid)
+                continue
+
+            row = dict(row)
+            conn.execute("UPDATE posts SET status='processing' WHERE id=?", (pid,))
+            conn.commit()
+
+            try:
+                zernio_id = dispatch_post(row)
+                mark_published(pid, zernio_id)
+                log.info(
+                    "dispatch: post id=%d platform=%s zernio_post_id=%s",
+                    pid, row["platform"], zernio_id,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.exception("dispatch: post id=%d failed: %s", pid, e)
+                # Schedule a 60 s retry — the scheduler daemon will pick it up
+                retry_at = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+                record_failure(pid, str(e), retry_at=retry_at)
+    finally:
+        conn.close()

@@ -14,55 +14,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sqlite3
 import sys
 from pathlib import Path
 
-from zerino.config import DB_PATH, get_logger
-from zerino.db.repositories.posts_repository import mark_published, record_failure
-from zerino.publishing.pipeline import process_and_queue
-from zerino.publishing.zernio.poster import dispatch_post
+from zerino.config import get_logger
+from zerino.publishing.pipeline import dispatch_post_ids, process_and_queue
 
 log = get_logger("zerino.cli.post_manual")
 
 ALL_PLATFORMS = ["tiktok", "youtube_shorts", "instagram_reels", "twitter", "pinterest"]
-
-
-def _dispatch_post_ids(post_ids: list[int]) -> None:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-
-    for pid in post_ids:
-        row = conn.execute(
-            """SELECT p.*, a.zernio_account_id, a.profile_id
-               FROM posts p
-               JOIN accounts a ON a.id = p.account_id
-               WHERE p.id = ?""",
-            (pid,),
-        ).fetchone()
-
-        if row is None:
-            log.warning("post id=%d not found in DB — skipping", pid)
-            continue
-
-        row = dict(row)
-        conn.execute(
-            "UPDATE posts SET status='processing' WHERE id=?", (pid,)
-        )
-        conn.commit()
-
-        try:
-            zernio_id = dispatch_post(row)
-            mark_published(pid, zernio_id)
-            log.info(
-                "published post id=%d platform=%s zernio_post_id=%s",
-                pid, row["platform"], zernio_id,
-            )
-        except Exception as e:
-            log.exception("post id=%d failed: %s", pid, e)
-            record_failure(pid, str(e), retry_at=None)
-
-    conn.close()
 
 
 def main() -> None:
@@ -108,7 +68,7 @@ def main() -> None:
         sys.exit(1)
 
     log.info("Dispatching %d post(s) now...", len(post_ids))
-    _dispatch_post_ids(post_ids)
+    dispatch_post_ids(post_ids)
 
 
 if __name__ == "__main__":
