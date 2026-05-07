@@ -23,7 +23,7 @@ from zerino.processors._captions import (
 )
 from zerino.processors.base import Processor, ProcessorResult
 
-VERTICAL_PLATFORMS = ("tiktok", "youtube_shorts", "instagram_reels", "twitter")
+VERTICAL_PLATFORMS = ("tiktok", "youtube_shorts", "facebook_reels", "twitter")
 
 
 class VerticalProcessor(Processor):

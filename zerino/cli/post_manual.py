@@ -22,7 +22,7 @@ from zerino.publishing.pipeline import dispatch_post_ids, process_and_queue
 
 log = get_logger("zerino.cli.post_manual")
 
-ALL_PLATFORMS = ["tiktok", "youtube_shorts", "instagram_reels", "twitter", "pinterest"]
+ALL_PLATFORMS = ["tiktok", "youtube_shorts", "facebook_reels", "twitter"]
 
 
 def main() -> None:
@@ -33,7 +33,7 @@ def main() -> None:
     parser.add_argument(
         "--platforms", nargs="+", default=ALL_PLATFORMS,
         help="Platforms to post to (default: all). "
-             "Choices: tiktok youtube_shorts instagram_reels twitter pinterest",
+             "Choices: tiktok youtube_shorts facebook_reels twitter",
     )
     parser.add_argument("--caption", default="", help="Caption / post text")
     parser.add_argument(

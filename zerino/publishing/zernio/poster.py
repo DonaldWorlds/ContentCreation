@@ -24,7 +24,7 @@ log = logging.getLogger("zerino.publishing.poster")
 
 _PLATFORM_MAP: dict[str, str] = {
     "youtube_shorts": "youtube",
-    "instagram_reels": "instagram",
+    "facebook_reels": "facebook",
 }
 
 

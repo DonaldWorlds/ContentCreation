@@ -17,7 +17,7 @@ def get_platform_preset(platform: str) -> dict:
             "aspect_ratio": "9:16",
             "safe_area": {"top": 120, "bottom": 260},
         },
-        "instagram_reels": {
+        "facebook_reels": {
             "canvas_width": 1080,
             "canvas_height": 1920,
             "aspect_ratio": "9:16",
@@ -28,14 +28,6 @@ def get_platform_preset(platform: str) -> dict:
             "canvas_height": 1920,
             "aspect_ratio": "9:16",
             "safe_area": {"top": 120, "bottom": 260},
-        },
-
-        # 2:3 image (Pinterest pin)
-        "pinterest": {
-            "canvas_width": 1000,
-            "canvas_height": 1500,
-            "aspect_ratio": "2:3",
-            "safe_area": {"top": 80, "bottom": 80},
         },
     }
 
