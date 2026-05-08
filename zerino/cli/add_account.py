@@ -17,6 +17,10 @@ Usage:
 
     # Deactivate an account (keeps row, stops it from receiving new posts)
     python -m zerino.cli.add_account deactivate --id <account-db-id>
+
+    # Permanently delete an account row (use only if you mistyped and want
+    # the id reused; otherwise prefer `deactivate` to preserve history)
+    python -m zerino.cli.add_account remove --id <account-db-id>
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ import argparse
 from zerino.db.repositories.accounts_repository import (
     add_account,
     deactivate_account,
+    delete_account,
     list_all_accounts,
 )
 
@@ -47,8 +52,12 @@ def main() -> None:
     sub.add_parser("list", help="List all registered accounts")
 
     # deactivate
-    p_deact = sub.add_parser("deactivate", help="Deactivate an account")
+    p_deact = sub.add_parser("deactivate", help="Deactivate an account (keep row)")
     p_deact.add_argument("--id", type=int, required=True, help="Account DB id")
+
+    # remove (hard delete)
+    p_rm = sub.add_parser("remove", help="Permanently delete an account row")
+    p_rm.add_argument("--id", type=int, required=True, help="Account DB id")
 
     args = parser.parse_args()
 
@@ -78,6 +87,13 @@ def main() -> None:
     elif args.cmd == "deactivate":
         deactivate_account(args.id)
         print(f"Account id={args.id} deactivated.")
+
+    elif args.cmd == "remove":
+        n = delete_account(args.id)
+        if n:
+            print(f"Account id={args.id} permanently deleted.")
+        else:
+            print(f"No account with id={args.id} found.")
 
 
 if __name__ == "__main__":

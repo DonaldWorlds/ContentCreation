@@ -48,3 +48,10 @@ def list_all_accounts() -> list[dict[str, Any]]:
 def deactivate_account(account_id: int) -> None:
     with _connect() as conn:
         conn.execute("UPDATE accounts SET active=0 WHERE id=?", (account_id,))
+
+
+def delete_account(account_id: int) -> int:
+    """Hard delete. Returns the number of rows removed (0 if no match)."""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        return cur.rowcount
