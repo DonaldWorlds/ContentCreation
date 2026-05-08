@@ -85,6 +85,13 @@ def dispatch_post_ids(post_ids: list[int]) -> None:
     in the future). Either way the post appears in the Zernio dashboard
     as soon as this function returns — no waiting on the local scheduler.
 
+    Concurrency: this function and the scheduler daemon (`scheduler_runner`)
+    both publish from the `posts` table. To prevent double-posting we claim
+    each row atomically with `UPDATE ... WHERE status='pending'`. If the
+    scheduler already claimed the row in the gap between create_post() and
+    here, our UPDATE matches zero rows and we skip — the scheduler is in
+    flight with that one and will mark it published.
+
     On failure, the post is marked pending with a 60 s retry, so the
     scheduler daemon will pick it up as a fallback.
     """
@@ -96,6 +103,22 @@ def dispatch_post_ids(post_ids: list[int]) -> None:
 
     try:
         for pid in post_ids:
+            # Atomic claim: only proceed if the row is still 'pending'.
+            # If the scheduler beat us to it, rowcount=0 and we skip.
+            now_iso = datetime.now(timezone.utc).isoformat()
+            cur = conn.execute(
+                "UPDATE posts SET status='processing', claimed_at=?, updated_at=? "
+                "WHERE id=? AND status='pending'",
+                (now_iso, now_iso, pid),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                log.info(
+                    "dispatch: post id=%d already claimed by scheduler or non-pending — skipping",
+                    pid,
+                )
+                continue
+
             row = conn.execute(
                 """SELECT p.*, a.zernio_account_id, a.profile_id
                    FROM posts p
@@ -105,12 +128,10 @@ def dispatch_post_ids(post_ids: list[int]) -> None:
             ).fetchone()
 
             if row is None:
-                log.warning("dispatch: post id=%d not found in DB — skipping", pid)
+                log.warning("dispatch: post id=%d not found in DB after claim — skipping", pid)
                 continue
 
             row = dict(row)
-            conn.execute("UPDATE posts SET status='processing' WHERE id=?", (pid,))
-            conn.commit()
 
             try:
                 zernio_id = dispatch_post(row)

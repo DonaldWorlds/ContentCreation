@@ -57,11 +57,17 @@ def get_post_by_id(post_id: int) -> dict[str, Any] | None:
 def claim_due_posts(limit: int = 10) -> list[dict[str, Any]]:
     """
     Atomically claim posts that are due for dispatch.
-    Returns rows already marked as 'processing' with claimed_at=now.
+
+    Two callers race for the posts table: this function (the scheduler
+    daemon) and `pipeline.dispatch_post_ids` (the inline dispatch fired
+    by the capture pipeline). To make sure exactly ONE of them wins each
+    row, we don't bulk-UPDATE the SELECT result — we per-row claim with
+    a conditional WHERE status='pending'. Rows that lost the race
+    (another claimant already flipped them) are skipped from the result.
     """
     now = _now()
     with _connect() as conn:
-        rows = conn.execute(
+        candidates = conn.execute(
             """SELECT p.*, a.zernio_account_id, a.profile_id
                FROM posts p
                JOIN accounts a ON a.id = p.account_id
@@ -74,21 +80,19 @@ def claim_due_posts(limit: int = 10) -> list[dict[str, Any]]:
             (now, now, limit),
         ).fetchall()
 
-        result = [dict(r) for r in rows]
-        ids = [r["id"] for r in result]
-        if not ids:
-            return result
-        conn.execute(
-            f"UPDATE posts SET status='processing', claimed_at=?, updated_at=? "
-            f"WHERE id IN ({','.join('?'*len(ids))})",
-            [now, now, *ids],
-        )
-        # Reflect the just-applied claim in the returned dicts so callers see
-        # claimed_at on the rows they're about to process.
-        for r in result:
-            r["claimed_at"] = now
-            r["status"] = "processing"
-        return result
+        claimed: list[dict[str, Any]] = []
+        for row in candidates:
+            cur = conn.execute(
+                "UPDATE posts SET status='processing', claimed_at=?, updated_at=? "
+                "WHERE id=? AND status='pending'",
+                (now, now, row["id"]),
+            )
+            if cur.rowcount == 1:
+                d = dict(row)
+                d["status"] = "processing"
+                d["claimed_at"] = now
+                claimed.append(d)
+        return claimed
 
 
 def recover_stale_claims(timeout_seconds: int = STALE_CLAIM_TIMEOUT_SECONDS) -> list[int]:
