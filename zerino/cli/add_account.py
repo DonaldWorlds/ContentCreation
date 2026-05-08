@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 
 from zerino.db.repositories.accounts_repository import (
+    AccountHasPostsError,
     add_account,
     deactivate_account,
     delete_account,
@@ -58,6 +59,12 @@ def main() -> None:
     # remove (hard delete)
     p_rm = sub.add_parser("remove", help="Permanently delete an account row")
     p_rm.add_argument("--id", type=int, required=True, help="Account DB id")
+    p_rm.add_argument(
+        "--force", action="store_true",
+        help="Also delete every post that references this account "
+             "(use only if the account row is genuinely wrong; for normal "
+             "'stop using this account' use `deactivate` instead).",
+    )
 
     args = parser.parse_args()
 
@@ -89,7 +96,16 @@ def main() -> None:
         print(f"Account id={args.id} deactivated.")
 
     elif args.cmd == "remove":
-        n = delete_account(args.id)
+        try:
+            n = delete_account(args.id, force=args.force)
+        except AccountHasPostsError as e:
+            print(f"Cannot remove account id={e.account_id} — {e.post_count} post(s) reference it.")
+            print("Choose one:")
+            print(f"  python -m zerino.cli.add_account deactivate --id {e.account_id}")
+            print(f"      (keeps the account + posts in the DB, just stops using it)")
+            print(f"  python -m zerino.cli.add_account remove --id {e.account_id} --force")
+            print(f"      (deletes the account AND all {e.post_count} post(s) — destructive)")
+            return
         if n:
             print(f"Account id={args.id} permanently deleted.")
         else:
