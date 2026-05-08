@@ -50,6 +50,39 @@ def deactivate_account(account_id: int) -> None:
         conn.execute("UPDATE accounts SET active=0 WHERE id=?", (account_id,))
 
 
+def update_account(
+    account_id: int,
+    *,
+    handle: str | None = None,
+    zernio_account_id: str | None = None,
+    profile_id: str | None = None,
+    active: bool | None = None,
+) -> int:
+    """Update mutable fields on an existing account row. Returns row count."""
+    sets: list[str] = []
+    params: list[Any] = []
+    if handle is not None:
+        sets.append("handle=?")
+        params.append(handle)
+    if zernio_account_id is not None:
+        sets.append("zernio_account_id=?")
+        params.append(zernio_account_id)
+    if profile_id is not None:
+        sets.append("profile_id=?")
+        params.append(profile_id)
+    if active is not None:
+        sets.append("active=?")
+        params.append(1 if active else 0)
+    if not sets:
+        return 0
+    params.append(account_id)
+    with _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE accounts SET {', '.join(sets)} WHERE id=?", params,
+        )
+        return cur.rowcount
+
+
 class AccountHasPostsError(Exception):
     """Raised when deleting an account that still has posts referencing it."""
 

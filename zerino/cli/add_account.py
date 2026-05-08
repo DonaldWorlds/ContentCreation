@@ -32,6 +32,7 @@ from zerino.db.repositories.accounts_repository import (
     deactivate_account,
     delete_account,
     list_all_accounts,
+    update_account,
 )
 
 
@@ -51,6 +52,17 @@ def main() -> None:
 
     # list
     sub.add_parser("list", help="List all registered accounts")
+
+    # update
+    p_upd = sub.add_parser(
+        "update",
+        help="Update fields on an existing account (handle, zernio id, profile id, active)",
+    )
+    p_upd.add_argument("--id", type=int, required=True, help="Account DB id (the small int from `list`, not the 24-char Zernio id)")
+    p_upd.add_argument("--handle", help="New handle")
+    p_upd.add_argument("--zernio-account-id", help="New 24-char Zernio account id")
+    p_upd.add_argument("--profile-id", help="New Zernio profile id")
+    p_upd.add_argument("--active", choices=["true", "false"], help="Reactivate (true) or deactivate (false)")
 
     # deactivate
     p_deact = sub.add_parser("deactivate", help="Deactivate an account (keep row)")
@@ -90,6 +102,20 @@ def main() -> None:
                 f"{r['id']:<4}  {r['platform']:<18}  {r['handle']:<20}"
                 f"  {r['zernio_account_id']:<26}  {status}"
             )
+
+    elif args.cmd == "update":
+        active = None if args.active is None else (args.active == "true")
+        n = update_account(
+            args.id,
+            handle=args.handle,
+            zernio_account_id=args.zernio_account_id,
+            profile_id=args.profile_id,
+            active=active,
+        )
+        if n == 0:
+            print(f"No account with id={args.id} (or no fields supplied to change).")
+        else:
+            print(f"Account id={args.id} updated.")
 
     elif args.cmd == "deactivate":
         deactivate_account(args.id)
