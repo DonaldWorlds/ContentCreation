@@ -43,16 +43,22 @@ class ClipGeneratorProcess:
 
         print(f"[FFMPEG] Cutting clip: {start}s → {end}s")
 
+        # Stream-copy the cut — no re-encode. This avoids the "wonky motion
+        # at the start" caused by the encoder warming up its rate control on
+        # a tiny isolated chunk. The final quality encode happens in
+        # export_generator (slow preset, CRF 20). Cuts snap to the nearest
+        # source keyframe; with OBS's typical 2 s GOP that's negligible
+        # imprecision and invisible to viewers.
         command = [
             "ffmpeg",
             "-y",
             "-ss", str(start),
             "-to", str(end),
             "-i", str(input_path),
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-preset", "fast",
-            str(output_path)
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-map", "0",
+            str(output_path),
         ]
 
         result = subprocess.run(command, capture_output=True, text=True)
