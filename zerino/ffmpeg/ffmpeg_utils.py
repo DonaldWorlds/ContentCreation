@@ -1,65 +1,76 @@
-import subprocess
+from __future__ import annotations
+
 import json
+import subprocess
 from pathlib import Path
 
-def get_video_duration_seconds(video_file: str | Path) -> float | None:
+from zerino.config import get_logger
 
+log = get_logger("zerino.ffmpeg.utils")
+
+
+def _run_ffprobe(args: list[str]) -> bytes:
+    """Run ffprobe with the given args; raise RuntimeError on any failure
+    with a clear message instead of letting FileNotFoundError leak out."""
+    try:
+        return subprocess.check_output(args, stderr=subprocess.PIPE, timeout=30)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "ffprobe is not on PATH. Install ffmpeg (which ships ffprobe) "
+            "and ensure it's on PATH."
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"ffprobe timed out after 30s: {' '.join(args)}") from e
+
+
+def get_video_duration_seconds(video_file: str | Path) -> float | None:
     video_file = Path(video_file)
 
-    #DEBUG (temporary but VERY useful)
-    print("FFPROBE PATH:", video_file)
-    print("EXISTS:", video_file.exists())
-
     if not video_file.exists():
-        print("ERROR: Video file does not exist")
+        log.error("video file does not exist: %s", video_file)
         return None
 
     try:
-        result = subprocess.check_output([
+        raw = _run_ffprobe([
             "ffprobe",
             "-v", "quiet",
             "-show_format",
             "-show_streams",
             "-print_format", "json",
-            str(video_file)
+            str(video_file),
         ])
-
-        data = json.loads(result.decode("utf-8"))
-
-        if "format" not in data or "duration" not in data["format"]:
-            print("ERROR: Duration missing from ffprobe output")
-            return None
-        
-        return float(data["format"]["duration"])
-
+        data = json.loads(raw.decode("utf-8"))
     except subprocess.CalledProcessError as e:
-        print("FFPROBE FAILED:", e)
+        log.error("ffprobe failed for %s: %s", video_file, e.stderr.decode("utf-8", "replace") if e.stderr else "")
+        return None
+    except (json.JSONDecodeError, RuntimeError) as e:
+        log.error("could not probe %s: %s", video_file, e)
         return None
 
-    except Exception as e:
-        print("UNKNOWN ERROR:", e)
+    if "format" not in data or "duration" not in data["format"]:
+        log.error("duration missing from ffprobe output for %s", video_file)
         return None
-    
+
+    return float(data["format"]["duration"])
 
 
 def probe_metadata(input_path):
-    result = subprocess.check_output([
+    raw = _run_ffprobe([
         "ffprobe",
         "-v", "quiet",
         "-print_format", "json",
         "-show_streams",
         "-show_format",
-        str(input_path)
+        str(input_path),
     ])
-
-    data = json.loads(result.decode("utf-8"))
+    data = json.loads(raw.decode("utf-8"))
     video_stream = next(
         (s for s in data["streams"] if s.get("codec_type") == "video"),
-        None
+        None,
     )
 
     if not video_stream:
-        raise Exception(f"No video stream found in {input_path}")
+        raise RuntimeError(f"No video stream found in {input_path}")
 
     width = int(video_stream["width"])
     height = int(video_stream["height"])

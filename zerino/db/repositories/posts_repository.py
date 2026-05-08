@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from zerino.config import DB_PATH
+
+# A post that's been in 'processing' longer than this is treated as stranded
+# (scheduler crashed mid-dispatch). Recovery marks it 'failed' rather than
+# auto-retrying, because we can't tell if Zernio already received it.
+STALE_CLAIM_TIMEOUT_SECONDS = 600
 
 
 def _connect() -> sqlite3.Connection:
@@ -52,7 +57,7 @@ def get_post_by_id(post_id: int) -> dict[str, Any] | None:
 def claim_due_posts(limit: int = 10) -> list[dict[str, Any]]:
     """
     Atomically claim posts that are due for dispatch.
-    Returns rows already marked as 'processing'.
+    Returns rows already marked as 'processing' with claimed_at=now.
     """
     now = _now()
     with _connect() as conn:
@@ -71,12 +76,54 @@ def claim_due_posts(limit: int = 10) -> list[dict[str, Any]]:
 
         result = [dict(r) for r in rows]
         ids = [r["id"] for r in result]
-        if ids:
-            conn.execute(
-                f"UPDATE posts SET status='processing', updated_at=? WHERE id IN ({','.join('?'*len(ids))})",
-                [now, *ids],
-            )
+        if not ids:
+            return result
+        conn.execute(
+            f"UPDATE posts SET status='processing', claimed_at=?, updated_at=? "
+            f"WHERE id IN ({','.join('?'*len(ids))})",
+            [now, now, *ids],
+        )
+        # Reflect the just-applied claim in the returned dicts so callers see
+        # claimed_at on the rows they're about to process.
+        for r in result:
+            r["claimed_at"] = now
+            r["status"] = "processing"
         return result
+
+
+def recover_stale_claims(timeout_seconds: int = STALE_CLAIM_TIMEOUT_SECONDS) -> list[int]:
+    """Mark posts stuck in 'processing' beyond `timeout_seconds` as 'failed'.
+
+    Called at scheduler startup and periodically after that. We can't safely
+    auto-retry, because Zernio may already have received the post — re-sending
+    would duplicate it. Marking 'failed' surfaces it to the operator (status
+    CLI / Zernio dashboard) for a manual decision.
+
+    Returns list of post ids that were recovered.
+    """
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+    ).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT id FROM posts
+               WHERE status='processing'
+                 AND claimed_at IS NOT NULL
+                 AND claimed_at < ?""",
+            (cutoff,),
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        if not ids:
+            return []
+        conn.execute(
+            f"UPDATE posts "
+            f"SET status='failed', "
+            f"    last_error='dispatch interrupted; check Zernio dashboard before retrying', "
+            f"    updated_at=? "
+            f"WHERE id IN ({','.join('?'*len(ids))})",
+            [_now(), *ids],
+        )
+        return ids
 
 
 def mark_published(post_id: int, zernio_post_id: str) -> None:

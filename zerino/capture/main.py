@@ -38,6 +38,7 @@ from zerino.capture.workers.clip_worker import ClipWorker
 from zerino.capture.workers.marker_worker import MarkerIngestWorker
 from zerino.config import RECORDINGS_DIR, get_logger
 from zerino.db.repositories.streamer_repository import StreamerRepository
+from zerino.healthcheck import HealthcheckError, run_capture_healthcheck
 
 DEFAULT_STREAMER_NAME = "default"
 DEFAULT_STREAMER_PLATFORM = "twitch"
@@ -59,6 +60,12 @@ def _ensure_default_streamer() -> int:
 def main() -> None:
     log = get_logger("zerino.capture.main")
     log.info("=== Zerino capture daemon starting ===")
+
+    try:
+        run_capture_healthcheck()
+    except HealthcheckError as e:
+        log.error("startup healthcheck failed: %s", e)
+        raise SystemExit(1)
 
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     streamer_id = _ensure_default_streamer()

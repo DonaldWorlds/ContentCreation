@@ -172,6 +172,7 @@ def create_database():
         max_attempts INTEGER NOT NULL DEFAULT 5,
         next_retry_at TEXT,
         last_error TEXT,
+        claimed_at TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY(clip_id) REFERENCES clips(id) ON DELETE SET NULL,

@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 import time
+
 from zerino.capture.services.export_service import ExportService
-from zerino.capture.services.queue_service import PipelineQueueService
+from zerino.config import get_logger
+
+log = get_logger("zerino.capture.export_worker")
+
 
 class ExportWorker:
     def __init__(self, export_queue):
@@ -8,32 +14,37 @@ class ExportWorker:
         self.export_queue = export_queue
 
     def run(self):
-        print("🚀 Export Worker Started...")
+        log.info("export worker started")
 
         while True:
             try:
-                print("[WORKER] Waiting for export job...")
                 job = self.export_queue.get_job(timeout=1)
                 if not job:
                     continue
 
                 try:
-                    if job["type"] == "export_ready":
-                        export_id = job["export_id"]
+                    job_type = job.get("type")
+                    if job_type == "export_ready":
+                        export_id = job.get("export_id")
                         self.process_export_job(export_id)
                     else:
-                        print(f"[WORKER] Unknown job type: {job.get('type')}")
+                        log.warning("unknown job type: %r", job_type)
+                except Exception:
+                    log.exception("export worker: job failed job=%r", job)
                 finally:
                     self.export_queue.task_done()
 
-            except Exception as e:
-                print(f"[WORKER] Worker error: {e}")
+            except Exception:
+                # Defensive: if get_job itself ever raises (queue corruption,
+                # etc.) don't kill the loop. Pause briefly then retry.
+                log.exception("export worker: outer loop error")
                 time.sleep(2)
 
     def process_export_job(self, export_id):
+        log.info("processing export_id=%s", export_id)
         try:
-            print(f"[WORKER] Processing export_id={export_id}")
             self.export_service.process_export(export_id)
-            print(f"[WORKER] Finished export_id={export_id}")
-        except Exception as e:
-            print(f"[WORKER] Failed export_id={export_id}: {e}")
+            log.info("finished export_id=%s", export_id)
+        except Exception:
+            log.exception("failed export_id=%s", export_id)
+            raise

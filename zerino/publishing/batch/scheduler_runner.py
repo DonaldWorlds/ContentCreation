@@ -20,10 +20,15 @@ from zerino.db.repositories.posts_repository import (
     claim_due_posts,
     mark_published,
     record_failure,
+    recover_stale_claims,
 )
+from zerino.healthcheck import HealthcheckError, run_scheduler_healthcheck
 from zerino.publishing.zernio.poster import dispatch_post
 
 log = get_logger("zerino.publishing.scheduler")
+
+# How often to sweep for stale 'processing' rows (scheduler crashed mid-dispatch).
+_STALE_RECOVERY_INTERVAL_SECONDS = 300.0
 
 # Phase 3: minimum seconds between consecutive posts to the same platform
 PLATFORM_RATE_LIMITS: dict[str, float] = {
@@ -47,6 +52,22 @@ def _next_retry_at(attempts: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
 
 
+def _sweep_stale_claims() -> None:
+    """Sweep stranded 'processing' rows. Logged WARN with ids so the user can
+    investigate (post may or may not have actually reached Zernio)."""
+    try:
+        recovered = recover_stale_claims()
+    except Exception:
+        log.exception("stale-claim sweep failed")
+        return
+    if recovered:
+        log.warning(
+            "recovered %d stale 'processing' post(s) -> marked 'failed': %s. "
+            "Check Zernio dashboard before retrying.",
+            len(recovered), recovered,
+        )
+
+
 def run_scheduler_loop(
     *,
     poll_seconds: float = 5.0,
@@ -54,8 +75,19 @@ def run_scheduler_loop(
 ) -> None:
     log.info("Scheduler started. db=%s poll=%.1fs", DB_PATH, poll_seconds)
 
+    try:
+        run_scheduler_healthcheck()
+    except HealthcheckError as e:
+        log.error("scheduler healthcheck failed: %s", e)
+        raise SystemExit(1)
+
+    # On startup, sweep once: anything left in 'processing' from a prior run
+    # is by definition stranded (no scheduler is alive holding it).
+    _sweep_stale_claims()
+
     _platform_last_sent: dict[str, float] = {}
     _last_heartbeat = time.monotonic()
+    _last_stale_sweep = time.monotonic()
 
     while True:
         # Phase 3: heartbeat
@@ -63,6 +95,12 @@ def run_scheduler_loop(
         if now_mono - _last_heartbeat >= _HEARTBEAT_INTERVAL:
             log.info("heartbeat: scheduler alive")
             _last_heartbeat = now_mono
+
+        # Periodic stale-claim sweep (covers in-process crashes that didn't
+        # come via a clean restart).
+        if now_mono - _last_stale_sweep >= _STALE_RECOVERY_INTERVAL_SECONDS:
+            _sweep_stale_claims()
+            _last_stale_sweep = now_mono
 
         try:
             due = claim_due_posts(limit=claim_limit)
