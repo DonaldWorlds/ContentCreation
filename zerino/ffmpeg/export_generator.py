@@ -16,6 +16,40 @@ LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
 AUDIO_FADE_IN_SEC = 0.15   # 150 ms — kills the hard-cut audio pop on entry
 AUDIO_FADE_OUT_SEC = 0.20  # 200 ms — gentle tail-out
 
+# --- Encode quality settings -------------------------------------------------
+# Bitrate-target VBR (replaces the prior CRF 20 mode that let x264 starve
+# gameplay/dark scenes down to ~4 Mbps and look muddy on 1080p60 short-form).
+#
+# Targets pick: TikTok recommends 8-12 Mbps for 1080p60 and re-encodes
+# anything above ~15 Mbps, so 15M is the sweet spot — max quality without
+# wasted upload bandwidth. YouTube Shorts wants >=8 Mbps. maxrate 18M gives
+# 20% headroom for high-motion bursts; bufsize 30M ~= 2x maxrate per Apple
+# guidance for stable rate control.
+TARGET_BITRATE = "15M"
+MAX_BITRATE = "18M"
+BUFFER_SIZE = "30M"
+
+# preset=slow gives better compression efficiency than medium at the same
+# bitrate (smaller artifacts for the same data budget). 30s short-form
+# clips re-encode in seconds; the speed cost is invisible.
+ENCODE_PRESET = "slow"
+
+# Force broadly-compatible 4:2:0 8-bit — required by some Zernio backends
+# and most short-form platforms; explicit so a future encoder change can't
+# silently switch to 4:2:2/10-bit and break upload.
+PIX_FMT = "yuv420p"
+
+# AAC at 256k is well under most platform limits and is the practical max
+# before perceptual gains plateau. Bumped from 192k.
+AUDIO_BITRATE = "256k"
+
+# Sharpening pass for the split layout's face half: the facecam is upscaled
+# from a small source crop (e.g. 480x270 -> 1080x960, ~3.5x zoom per
+# dimension), and lanczos upscales look soft because interpolation can't
+# manufacture detail. A light luma-only unsharp restores perceived
+# sharpness without producing chroma ringing on faces.
+SPLIT_FACE_UNSHARP = "unsharp=5:5:0.8:5:5:0.0"
+
 
 class ExportGenerator:
 
@@ -147,10 +181,13 @@ class ExportGenerator:
             "-vf", vf,
             "-af", af,
             "-c:v", "libx264",
-            "-preset", config.get("preset", "slow"),
-            "-crf", str(config.get("crf", 20)),
+            "-preset", ENCODE_PRESET,
+            "-b:v", TARGET_BITRATE,
+            "-maxrate", MAX_BITRATE,
+            "-bufsize", BUFFER_SIZE,
+            "-pix_fmt", PIX_FMT,
             "-c:a", "aac",
-            "-b:a", config.get("audio_bitrate", "192k"),
+            "-b:a", AUDIO_BITRATE,
             "-movflags", "+faststart",
             str(output_path),
         ]
@@ -207,11 +244,16 @@ class ExportGenerator:
 
         # Each half: source crop → eq color bump → scale (increase) → center crop → fps.
         # eq is applied BEFORE the final crop so libass-burned subs (added later) aren't tinted.
+        # Face chain ends with `unsharp` because the small facecam region gets
+        # upscaled ~3x; lanczos interpolation looks soft and unsharp restores
+        # perceived edge detail. Game chain skips unsharp — it's a downscale
+        # and sharpening would just amplify noise.
         face_chain = (
             f"crop={fw}:{fh}:{fx}:{fy},"
             f"{COLOR_FILTER},"
             f"scale={canvas_width}:{half_h}:flags={scaler}:force_original_aspect_ratio=increase,"
             f"crop={canvas_width}:{half_h},"
+            f"{SPLIT_FACE_UNSHARP},"
             f"setsar=1,fps={fps}"
         )
         game_chain = (
@@ -255,10 +297,13 @@ class ExportGenerator:
             "-map", "0:a",
             "-af", af,
             "-c:v", "libx264",
-            "-preset", "slow",
-            "-crf", "20",
+            "-preset", ENCODE_PRESET,
+            "-b:v", TARGET_BITRATE,
+            "-maxrate", MAX_BITRATE,
+            "-bufsize", BUFFER_SIZE,
+            "-pix_fmt", PIX_FMT,
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-b:a", AUDIO_BITRATE,
             "-movflags", "+faststart",
             str(output_path),
         ]
@@ -296,10 +341,13 @@ class ExportGenerator:
             "-vf", vf,
             "-af", af,
             "-c:v", "libx264",
-            "-preset", config.get("preset", "slow"),
-            "-crf", str(config.get("crf", 20)),
+            "-preset", ENCODE_PRESET,
+            "-b:v", TARGET_BITRATE,
+            "-maxrate", MAX_BITRATE,
+            "-bufsize", BUFFER_SIZE,
+            "-pix_fmt", PIX_FMT,
             "-c:a", "aac",
-            "-b:a", config.get("audio_bitrate", "192k"),
+            "-b:a", AUDIO_BITRATE,
             "-movflags", "+faststart",
             str(output_path)
         ]
@@ -309,7 +357,7 @@ class ExportGenerator:
         if result.returncode != 0:
             raise Exception(result.stderr)
         return str(output_path)
-    
+
 if __name__ == '__main__':
     from zerino.config import CLIPS_DIR, RENDERS_DIR
 
