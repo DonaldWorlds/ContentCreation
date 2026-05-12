@@ -22,17 +22,17 @@ class MarkerService:
             start_time = self.state.get("start_time")
 
             if not recording:
-                print("⚠️ Cannot create marker: no active recording")
+                print("[warn] Cannot create marker: no active recording")
                 return
 
             recording_id = recording.get("id")
 
             if not streamer_id:
-                print("⚠️ Cannot create marker: no streamer set")
+                print("[warn] Cannot create marker: no streamer set")
                 return
 
             if not start_time:
-                print("⚠️ Cannot create marker: recording start time not set")
+                print("[warn] Cannot create marker: recording start time not set")
                 return
 
             timestamp = int(time.time() - start_time)
@@ -47,4 +47,4 @@ class MarkerService:
 
             self.state.setdefault("markers_temp", []).append(timestamp)
 
-        print(f"✅ Marker created @ {timestamp}s (ID: {marker_id}, kind: {kind})")
+        print(f"[ok] Marker created @ {timestamp}s (ID: {marker_id}, kind: {kind})")

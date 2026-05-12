@@ -56,7 +56,7 @@ class RecordingService:
     def wait_for_file_ready(self, file_path: Path, timeout: int = 45) -> bool:
         start_time = time.time()
         last_size = -1
-        print(f"⏳ Waiting for {file_path.name} (timeout: {timeout}s)")
+        print(f"[wait] for {file_path.name} (timeout: {timeout}s)")
 
         while time.time() - start_time < timeout:
             if not file_path.exists():
@@ -65,13 +65,13 @@ class RecordingService:
 
             current_size = file_path.stat().st_size
             if current_size > 0 and current_size == last_size:
-                print(f"✅ File stable at {current_size:,} bytes")
+                print(f"[ok] File stable at {current_size:,} bytes")
                 return True
 
             last_size = current_size
             time.sleep(0.5)
 
-        print(f"❌ Timeout after {timeout}s")
+        print(f"[fail] Timeout after {timeout}s")
         return False
 
     def is_valid_recording_file(self, file_path: Path) -> bool:

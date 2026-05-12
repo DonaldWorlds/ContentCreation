@@ -117,8 +117,8 @@ def main() -> None:
         "F9 for gameplay moments during the stream, then end recording."
     )
     log.info(
-        "OBS tip: in Settings → Output, enable 'Automatically record when streaming' "
-        "+ Recording → 'Use stream encoder' so one Start Streaming click drives "
+        "OBS tip: in Settings -> Output, enable 'Automatically record when streaming' "
+        "+ Recording -> 'Use stream encoder' so one Start Streaming click drives "
         "both outputs from a single encoder. Two encoders contend for CPU and "
         "produce stuttery recordings on long sessions."
     )

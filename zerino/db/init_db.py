@@ -216,7 +216,7 @@ def create_database():
     conn.commit()
     conn.close()
 
-    print("✅ Database initialized at:", DB_PATH)
+    print("[ok] Database initialized at:", DB_PATH)
 
 
 if __name__ == "__main__":

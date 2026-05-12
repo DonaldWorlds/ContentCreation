@@ -75,7 +75,7 @@ class ExportService:
             )
             self.mark_export_completed(export_id, output_path)
 
-            print(f"[DB] Export {export_id} marked completed → {output_path}")
+            print(f"[DB] Export {export_id} marked completed -> {output_path}")
 
         except Exception as e:
             self.mark_export_failed(export_id, str(e))
