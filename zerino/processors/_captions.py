@@ -22,6 +22,12 @@ from pathlib import Path
 WHISPER_MODEL_SIZE = "small"
 WORDS_PER_CHUNK = 3   # how many words sit on screen at once during karaoke
 
+# Caption timing shift. POSITIVE values delay captions (appear later);
+# NEGATIVE values advance them. Default 0 = use Whisper's word.start times
+# unchanged. Bump to ~0.10 if captions visibly lead your voice after the
+# smooth-karaoke rebuild below; lower to negative if they lag.
+CAPTION_TIME_OFFSET_SECONDS = 0.0
+
 _log = logging.getLogger("zerino.processors.captions")
 _whisper_model = None  # process-wide cache
 _libass_available: bool | None = None  # None=untested, True/False=cached probe result
@@ -181,14 +187,24 @@ def _build_karaoke_segments(words: list) -> list[Segment]:
     word — each Segment displays the full chunk with the current word
     coloured HIGHLIGHT_COLOUR and the rest TEXT_COLOUR.
 
-    Result: TikTok-signature karaoke — the line stays on screen, one word at
-    a time lights up in yellow (or whatever HIGHLIGHT_COLOUR is set to).
+    Result: TikTok-signature karaoke — the chunk stays on screen continuously,
+    with the highlight moving word-by-word across the chunk.
+
+    CONTINUOUS-SPAN BEHAVIOR (critical for sync):
+      Each segment runs from `current.start` to `next_word.start` (or to
+      the chunk's last-word `.end` for the final word in the chunk). This
+      eliminates the inter-word gaps in the old "current.start..current.end"
+      version, where the caption would VANISH between words and pop back in
+      at the next word's start time — visually it read as "caption appears
+      before I said the word" because the eye sees the pop-in slightly
+      before the ear processes the phoneme.
     """
     out: list[Segment] = []
     for i in range(0, len(words), WORDS_PER_CHUNK):
         chunk = words[i:i + WORDS_PER_CHUNK]
         if not chunk:
             continue
+        chunk_tail = chunk[-1].end
         for j, current in enumerate(chunk):
             parts: list[str] = []
             for k, w in enumerate(chunk):
@@ -204,7 +220,20 @@ def _build_karaoke_segments(words: list) -> list[Segment]:
             text = " ".join(parts).strip()
             if not text:
                 continue
-            out.append(Segment(start=current.start, end=current.end, text=text))
+            # Each segment ends where the NEXT segment begins, so the chunk
+            # stays painted on screen continuously across the gaps Whisper
+            # leaves between words.
+            seg_start = current.start + CAPTION_TIME_OFFSET_SECONDS
+            if j + 1 < len(chunk):
+                seg_end = chunk[j + 1].start + CAPTION_TIME_OFFSET_SECONDS
+            else:
+                seg_end = chunk_tail + CAPTION_TIME_OFFSET_SECONDS
+            # Defensive: Whisper occasionally returns zero/negative-duration
+            # words on very short utterances. Ensure end > start so libass
+            # actually renders the line.
+            if seg_end <= seg_start:
+                seg_end = seg_start + 0.05
+            out.append(Segment(start=seg_start, end=seg_end, text=text))
     return out
 
 
