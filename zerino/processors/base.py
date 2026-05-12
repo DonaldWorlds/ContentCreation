@@ -7,7 +7,6 @@ variants of one renderer. See memory: zerino_posting_types.md.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,12 +20,21 @@ class ProcessorResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class Processor(ABC):
-    """Base class. Subclasses MUST set `posting_type` and implement `process`."""
+class Processor:
+    """Base class for render processors.
+
+    Subclasses MUST set `posting_type` and implement `process_clip_job`
+    (the active one-pass-from-source render path). `process` is the legacy
+    cut-file-in entry point — kept as a stub on the base so subclasses that
+    only support the modern path (SquareProcessor, SplitProcessor) can still
+    instantiate. Override it if you need cut-file-in support.
+    """
 
     posting_type: str = ""
 
-    @abstractmethod
     def process(self, input_path: Path | str, platform: str, output_dir: Path | str) -> ProcessorResult:
-        """Render the input clip for the given platform; return ProcessorResult."""
-        raise NotImplementedError
+        """Legacy entry point. Raise unless the subclass overrides."""
+        raise NotImplementedError(
+            f"{type(self).__name__} only supports process_clip_job (the active path). "
+            f"Use Router.route_clip_job instead of the legacy Router.route."
+        )

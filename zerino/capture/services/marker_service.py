@@ -3,14 +3,19 @@ from zerino.db.repositories.marker_repository import MarkerRepository
 
 
 class MarkerService:
-    """Handles marker creation logic (validation, timestamp, DB writes)."""
+    """Handles marker creation logic (validation, timestamp, DB writes).
+
+    `kind` is the hotkey-derived clip type: 'talking_head' (F8, square render)
+    or 'gameplay' (F9, split render). Drives layout selection downstream in
+    ClipService → ClipJob → Router.
+    """
 
     def __init__(self, state, lock=None):
         self.state = state
         self.marker_repo = MarkerRepository()
         self.lock = lock or state.get("lock")
 
-    def create_marker(self):
+    def create_marker(self, kind: str = "talking_head"):
         with self.lock:
             recording = self.state.get("current_recording")
             streamer_id = self.state.get("current_streamer_id")
@@ -36,9 +41,10 @@ class MarkerService:
                 recording_id=recording_id,
                 streamer_id=streamer_id,
                 timestamp=timestamp,
-                note=None
+                kind=kind,
+                note=None,
             )
 
             self.state.setdefault("markers_temp", []).append(timestamp)
 
-        print(f"✅ Marker created @ {timestamp}s (ID: {marker_id})")
+        print(f"✅ Marker created @ {timestamp}s (ID: {marker_id}, kind: {kind})")

@@ -63,6 +63,7 @@ def main() -> None:
     p_upd.add_argument("--zernio-account-id", help="New 24-char Zernio account id")
     p_upd.add_argument("--profile-id", help="New Zernio profile id")
     p_upd.add_argument("--active", choices=["true", "false"], help="Reactivate (true) or deactivate (false)")
+    p_upd.add_argument("--layout", choices=["vertical", "square", "split"], help="Switch the account's render layout")
 
     # deactivate
     p_deact = sub.add_parser("deactivate", help="Deactivate an account (keep row)")
@@ -86,21 +87,26 @@ def main() -> None:
             handle=args.handle,
             zernio_account_id=args.zernio_account_id,
             profile_id=args.profile_id,
+            layout=args.layout,
         )
-        print(f"Registered: id={row_id} platform={args.platform} handle={args.handle}")
+        print(
+            f"Registered: id={row_id} platform={args.platform} "
+            f"handle={args.handle} layout={args.layout}"
+        )
 
     elif args.cmd == "list":
         rows = list_all_accounts()
         if not rows:
             print("No accounts registered. Use: python -m zerino.cli.add_account add ...")
             return
-        print(f"{'ID':<4}  {'PLATFORM':<18}  {'HANDLE':<20}  {'ZERNIO ID':<26}  STATUS")
-        print("-" * 78)
+        print(f"{'ID':<4}  {'PLATFORM':<18}  {'HANDLE':<20}  {'ZERNIO ID':<26}  {'LAYOUT':<9}  STATUS")
+        print("-" * 90)
         for r in rows:
             status = "active" if r["active"] else "inactive"
+            layout = r.get("layout") or "vertical"
             print(
                 f"{r['id']:<4}  {r['platform']:<18}  {r['handle']:<20}"
-                f"  {r['zernio_account_id']:<26}  {status}"
+                f"  {r['zernio_account_id']:<26}  {layout:<9}  {status}"
             )
 
     elif args.cmd == "update":
@@ -111,6 +117,7 @@ def main() -> None:
             zernio_account_id=args.zernio_account_id,
             profile_id=args.profile_id,
             active=active,
+            layout=args.layout,
         )
         if n == 0:
             print(f"No account with id={args.id} (or no fields supplied to change).")

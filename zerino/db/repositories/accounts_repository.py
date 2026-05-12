@@ -13,17 +13,25 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+VALID_LAYOUTS = ("vertical", "square", "split")
+
+
 def add_account(
     platform: str,
     handle: str,
     zernio_account_id: str,
     profile_id: str | None = None,
+    layout: str = "vertical",
 ) -> int:
+    if layout not in VALID_LAYOUTS:
+        raise ValueError(
+            f"layout must be one of {VALID_LAYOUTS}, got {layout!r}"
+        )
     with _connect() as conn:
         cur = conn.execute(
-            """INSERT INTO accounts (platform, handle, zernio_account_id, profile_id)
-               VALUES (?, ?, ?, ?)""",
-            (platform.lower(), handle, zernio_account_id, profile_id),
+            """INSERT INTO accounts (platform, handle, zernio_account_id, profile_id, layout)
+               VALUES (?, ?, ?, ?, ?)""",
+            (platform.lower(), handle, zernio_account_id, profile_id, layout),
         )
         return cur.lastrowid
 
@@ -57,6 +65,7 @@ def update_account(
     zernio_account_id: str | None = None,
     profile_id: str | None = None,
     active: bool | None = None,
+    layout: str | None = None,
 ) -> int:
     """Update mutable fields on an existing account row. Returns row count."""
     sets: list[str] = []
@@ -73,6 +82,13 @@ def update_account(
     if active is not None:
         sets.append("active=?")
         params.append(1 if active else 0)
+    if layout is not None:
+        if layout not in VALID_LAYOUTS:
+            raise ValueError(
+                f"layout must be one of {VALID_LAYOUTS}, got {layout!r}"
+            )
+        sets.append("layout=?")
+        params.append(layout)
     if not sets:
         return 0
     params.append(account_id)

@@ -1,10 +1,37 @@
-def get_platform_preset(platform: str) -> dict:
+def get_platform_preset(platform: str, layout: str = "vertical") -> dict:
     """
-    Returns the target output settings for a platform.
-    Example: canvas size, aspect ratio, and quality-related defaults.
+    Returns the target output settings for a (platform, layout) pair.
+
+    `layout`:
+        'vertical' = 1080x1920 9:16 (default, original behavior)
+        'square'   = 1080x1080 1:1  (talking-head profile accounts)
+        'split'    = 1080x1920 9:16 composed as face-top + gameplay-bottom
+                     (F9 gameplay marker — composition lives in SplitProcessor,
+                      this just supplies the canvas size).
     """
+    if layout == "square":
+        # Same safe-area top/bottom as vertical for now — the caption is
+        # placed proportionally inside the canvas via MarginV in _captions.py.
+        return {
+            "canvas_width": 1080,
+            "canvas_height": 1080,
+            "aspect_ratio": "1:1",
+            "safe_area": {"top": 90, "bottom": 150},
+        }
+
+    if layout == "split":
+        # 9:16 canvas, but visually divided in half: face 1080x960 on top,
+        # gameplay 1080x960 on bottom. Captions land just below the seam
+        # (MarginV picked by SplitProcessor, not the LAYOUT_MARGIN_V table).
+        return {
+            "canvas_width": 1080,
+            "canvas_height": 1920,
+            "aspect_ratio": "9:16",
+            "safe_area": {"top": 120, "bottom": 260},
+        }
+
+    # Default: vertical 9:16.
     presets = {
-        # 9:16 short-form vertical (the only video format in v1)
         "tiktok": {
             "canvas_width": 1080,
             "canvas_height": 1920,
@@ -100,15 +127,17 @@ def get_golden_zone_crop_config(width: int, height: int, target_aspect: str) -> 
     }
 
 
-def get_talking_head_template(platform: str) -> dict:
+def get_talking_head_template(platform: str, layout: str = "vertical") -> dict:
     """
-    Returns the composition template for talking-head style clips.
+    Returns the composition template for talking-head style clips, for the
+    given (platform, layout) pair.
     """
-    preset = get_platform_preset(platform)
+    preset = get_platform_preset(platform, layout=layout)
 
     return {
         "template": "talking_head",
         "platform": platform.lower(),
+        "layout": layout,
         "canvas_width": preset["canvas_width"],
         "canvas_height": preset["canvas_height"],
         "aspect_ratio": preset["aspect_ratio"],
@@ -118,22 +147,25 @@ def get_talking_head_template(platform: str) -> dict:
     }
 
 
-def build_processing_config(metadata: dict, platform: str, style: str = "talking_head") -> dict:
+def build_processing_config(metadata: dict, platform: str, style: str = "talking_head", layout: str = "vertical") -> dict:
     """
     Builds the final framing config that the FFmpeg generator can consume.
+
+    `layout` selects the canvas: 'vertical' (1080x1920) or 'square' (1080x1080).
     """
-    preset = get_platform_preset(platform)
+    preset = get_platform_preset(platform, layout=layout)
     width = metadata["width"]
     height = metadata["height"]
 
     crop_mode = decide_crop_vs_pad(width, height, preset["aspect_ratio"])
 
     if style == "talking_head":
-        template = get_talking_head_template(platform)
+        template = get_talking_head_template(platform, layout=layout)
     else:
         template = {
             "template": "default",
             "platform": platform.lower(),
+            "layout": layout,
             "canvas_width": preset["canvas_width"],
             "canvas_height": preset["canvas_height"],
             "aspect_ratio": preset["aspect_ratio"],
@@ -148,6 +180,7 @@ def build_processing_config(metadata: dict, platform: str, style: str = "talking
         "aspect_ratio": template["aspect_ratio"],
         "safe_area": template["safe_area"],
         "template": template["template"],
+        "layout": layout,
         "mode": crop_mode,
         "center_bias": template.get("center_bias", 0.5),
         "zoom_amount": 1.0,

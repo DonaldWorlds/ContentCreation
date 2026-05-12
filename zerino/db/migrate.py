@@ -37,6 +37,28 @@ def _apply_column_migrations(log) -> None:
         # posts.claimed_at — set when scheduler claims a row for dispatch.
         # Used to detect stale 'processing' rows after a crash.
         _add_column_if_missing(conn, "posts", "claimed_at", "TEXT", log)
+        # accounts.layout — per-account render preference. 'vertical' = the
+        # original 1080x1920. 'square' = 1080x1080. Same platform can run
+        # both layouts on different account profiles.
+        # NOTE: SQLite ALTER TABLE ADD COLUMN cannot create a CHECK constraint
+        # on the new column (CHECK is enforced only at row-write time and
+        # ALTER bypasses validation). We accept that on existing DBs the
+        # column is unconstrained text; fresh installs get the CHECK via
+        # init_db.py. The CLI clamps values to the valid set.
+        _add_column_if_missing(
+            conn, "accounts", "layout",
+            "TEXT NOT NULL DEFAULT 'vertical'",
+            log,
+        )
+        # markers.kind — F8 (talking_head) vs F9 (gameplay). Drives the
+        # render layout chosen for the clip: 'talking_head' -> square fill,
+        # 'gameplay' -> split (face on top + gameplay on bottom).
+        # Existing rows backfill to 'talking_head' (pre-F9 behavior).
+        _add_column_if_missing(
+            conn, "markers", "kind",
+            "TEXT NOT NULL DEFAULT 'talking_head'",
+            log,
+        )
         conn.commit()
     finally:
         conn.close()

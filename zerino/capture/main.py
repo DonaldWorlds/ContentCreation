@@ -101,7 +101,7 @@ def main() -> None:
     marker_service = MarkerService(state, lock=lock)
     marker_worker = MarkerIngestWorker(state=state, marker_service=marker_service)
     threading.Thread(target=marker_worker.start, daemon=True, name="marker-hotkey").start()
-    log.info("marker hotkey listener: F8 (press during recording)")
+    log.info("marker hotkey listener: F8 = talking_head (square), F9 = gameplay (split)")
 
     # --- Clip worker (queue consumer) ------------------------------------ #
     clip_service = ClipService()
@@ -112,7 +112,19 @@ def main() -> None:
     log.info("clip worker: ready")
 
     log.info("=== All capture workers running. Ctrl+C to stop. ===")
-    log.info("Now: start your OBS recording, press F8 during stream, end recording.")
+    log.info(
+        "Now: start your OBS recording, press F8 for talking-head moments or "
+        "F9 for gameplay moments during the stream, then end recording."
+    )
+    log.info(
+        "OBS tip: in Settings → Output, enable 'Automatically record when streaming' "
+        "+ Recording → 'Use stream encoder' so one Start Streaming click drives "
+        "both outputs from a single encoder. Two encoders contend for CPU and "
+        "produce stuttery recordings on long sessions."
+    )
+    log.info(
+        "Alternate entry point: drop a video file with `python -m zerino.cli.clip_file --file <path>`"
+    )
 
     try:
         while True:

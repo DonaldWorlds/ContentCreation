@@ -23,7 +23,12 @@ from pathlib import Path
 from zerino.config import get_logger
 from zerino.db.repositories.accounts_repository import list_all_accounts
 from zerino.db.repositories.captions_repository import pick_random_caption
-from zerino.publishing.pipeline import dispatch_post_ids, process_and_queue
+from zerino.models import ClipJob
+from zerino.publishing.pipeline import (
+    dispatch_post_ids,
+    process_and_queue,
+    process_and_queue_clip_job,
+)
 
 DEFAULT_INTERVAL_MINUTES = 120  # 2 hours between scheduled clips
 
@@ -108,7 +113,7 @@ def queue_clips_for_posting(
         chosen_caption = caption if caption else pick_random_caption()
         if not chosen_caption:
             log.warning(
-                "clip_to_posts: caption pool empty — clip_id=%d will post with no body. "
+                "clip_to_posts: caption pool empty — clip_id=%s will post with no body. "
                 "Add captions: python -m zerino.cli.captions add ...",
                 clip_id,
             )
@@ -120,7 +125,7 @@ def queue_clips_for_posting(
 
         # Structured log line — same info but for logs/zerino.log
         log.info(
-            "clip_to_posts: clip_id=%d (idx=%d) -> %s (mode=%s)",
+            "clip_to_posts: clip_id=%s (idx=%d) -> %s (mode=%s)",
             clip_id, index, when_full, mode,
         )
 
@@ -145,5 +150,111 @@ def queue_clips_for_posting(
     log.info(
         "clip_to_posts: queued %d post(s) across %d clip(s)",
         len(all_post_ids), len(clip_specs),
+    )
+    return all_post_ids
+
+
+def queue_clip_jobs_for_posting(
+    jobs: list[ClipJob],
+    *,
+    caption: str | None = None,
+    interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
+    platforms: list[str] | None = None,
+) -> list[int]:
+    """Render each ClipJob one-pass-per-platform and queue post rows.
+
+    Active path for the new no-intermediate-cut flow. Each job triggers one
+    accurate-seek re-encode pass per platform with captions burned in, then
+    one post row per (platform, account).
+
+    Posting cadence: index 0 posts immediately, the rest are spaced
+    `interval_minutes` apart. The schedule is written into each job's
+    `scheduled_for` field before rendering.
+
+    Args:
+        jobs: list of ClipJob in posting order. Their `caption`, `mode`,
+            and `scheduled_for` fields are filled in here.
+        caption: explicit post text for every clip, or None to draw a
+            different random caption per clip from the pool.
+        interval_minutes: gap between scheduled clips. Default 120 (2 hours).
+        platforms: override every job's `platforms` field with this list,
+            or None to use whatever each job already has. If a job has
+            empty platforms and this is None, all platforms with active
+            accounts are used.
+    """
+    if not jobs:
+        log.info("clip_to_posts: nothing to queue")
+        return []
+
+    default_platforms = platforms or _platforms_with_accounts()
+    if not default_platforms:
+        log.warning(
+            "clip_to_posts: no active accounts registered — no posts will be queued. "
+            "Register one with: python -m zerino.cli.add_account add ..."
+        )
+        return []
+
+    log.info(
+        "clip_to_posts: queuing %d clip job(s), interval=%dmin",
+        len(jobs), interval_minutes,
+    )
+
+    now = datetime.now(timezone.utc)
+    all_post_ids: list[int] = []
+
+    print()
+    print(f"=== Posting schedule for {len(jobs)} clip(s) ===")
+
+    for index, job in enumerate(jobs):
+        if index == 0:
+            job.scheduled_for = now - timedelta(seconds=30)
+            job.mode = "manual"
+            when_short = "POSTING NOW"
+            when_full = "immediate"
+        else:
+            job.scheduled_for = now + timedelta(minutes=index * interval_minutes)
+            hours = int(index * interval_minutes // 60)
+            mins = int(index * interval_minutes % 60)
+            offset = (
+                f"in {hours}h {mins:02d}m" if hours else f"in {mins} min"
+            )
+            local_time = job.scheduled_for.astimezone()
+            when_short = f"scheduled for {local_time:%a %b %d, %I:%M %p %Z} ({offset})"
+            when_full = job.scheduled_for.isoformat()
+            job.mode = "scheduled"
+
+        # Caption: per-job override > batch override > random pool draw.
+        if not job.caption:
+            job.caption = caption if caption else (pick_random_caption() or "")
+        if not job.caption:
+            log.warning(
+                "clip_to_posts: caption pool empty — clip_id=%s will post with no body.",
+                job.clip_id,
+            )
+
+        # Platforms: caller's override > job's own list > default (all active).
+        if platforms is not None:
+            job.platforms = platforms
+        elif not job.platforms:
+            job.platforms = default_platforms
+
+        print(f"  Clip {index + 1}: {when_short}")
+        print(f"          src:  {job.source_path.name} [{job.start:.1f}s-{job.end:.1f}s]")
+        print(f"          text: {job.caption.splitlines()[0] if job.caption else '(no caption — pool is empty)'}")
+
+        log.info(
+            "clip_to_posts: clip_id=%s (idx=%d) -> %s (mode=%s) platforms=%s",
+            job.clip_id, index, when_full, job.mode, job.platforms,
+        )
+
+        post_ids = process_and_queue_clip_job(job)
+        all_post_ids.extend(post_ids)
+        dispatch_post_ids(post_ids)
+
+    print(f"=== {len(all_post_ids)} post(s) sent to Zernio. Check your Zernio dashboard. ===")
+    print()
+    log.info(
+        "clip_to_posts: queued %d post(s) across %d clip job(s)",
+        len(all_post_ids), len(jobs),
     )
     return all_post_ids

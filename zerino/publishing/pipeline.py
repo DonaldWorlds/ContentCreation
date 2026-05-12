@@ -18,6 +18,7 @@ from zerino.db.repositories.posts_repository import (
     mark_published,
     record_failure,
 )
+from zerino.models import ClipJob
 from zerino.publishing.zernio.poster import dispatch_post
 from zerino.router import Router
 
@@ -71,6 +72,88 @@ def process_and_queue(
             log.info(
                 "pipeline: queued post id=%d platform=%s handle=%s render=%s",
                 pid, platform, acct["handle"], result.output_path.name,
+            )
+
+    return post_ids
+
+
+def process_and_queue_clip_job(job: ClipJob) -> list[int]:
+    """One-pass render from a ClipJob → fanned-out post rows.
+
+    Layout-aware fan-out:
+      1. For each platform in job.platforms, look up the active accounts.
+      2. Pick the layout: if `job.layout` is set (e.g. clip-content-driven
+         from the marker kind — F8 talking_head → square, F9 gameplay → split)
+         it overrides every account's `layout` column. Otherwise fall back
+         to grouping accounts by their per-account preference.
+      3. Render once per (platform, layout) pair — same layout = same render.
+      4. Post each account using the matching render.
+
+    Returns list of post IDs created. Logs and skips platforms with no
+    registered accounts, and layouts the router rejected (failures already
+    logged inside the router).
+    """
+    job_layout = (job.layout or "").lower() or None
+
+    # Build the set of accounts per platform, and the (platform, layout)
+    # targets we need to render.
+    accounts_by_platform: dict[str, list[dict]] = {}
+    targets: list[tuple[str, str]] = []
+    for platform in job.platforms:
+        platform = platform.lower()
+        accounts = get_accounts_for_platform(platform)
+        if not accounts:
+            log.warning(
+                "pipeline: no active accounts for platform=%s — skipping fan-out. "
+                "Add one with: python -m zerino.cli.add_account add --platform %s ...",
+                platform, platform,
+            )
+            continue
+        accounts_by_platform[platform] = accounts
+        if job_layout is not None:
+            # Clip-level layout wins: one render per platform, all accounts
+            # receive it regardless of their own layout column.
+            targets.append((platform, job_layout))
+        else:
+            # Each unique layout among the platform's accounts needs its own render.
+            for acct in accounts:
+                layout = (acct.get("layout") or "vertical").lower()
+                targets.append((platform, layout))
+
+    if not targets:
+        return []
+
+    router = Router()
+    renders = router.route_clip_job(job, targets=targets)
+
+    scheduled_str = job.scheduled_for.isoformat() if job.scheduled_for else None
+    post_ids: list[int] = []
+
+    for platform, accounts in accounts_by_platform.items():
+        for acct in accounts:
+            layout = job_layout or (acct.get("layout") or "vertical").lower()
+            result = renders.get((platform, layout))
+            if result is None:
+                log.warning(
+                    "pipeline: no render for (platform=%s, layout=%s) — "
+                    "skipping account handle=%s id=%s (render failed earlier)",
+                    platform, layout, acct.get("handle"), acct.get("id"),
+                )
+                continue
+
+            pid = create_post(
+                platform=platform,
+                account_id=acct["id"],
+                render_path=str(result.output_path),
+                caption=job.caption,
+                clip_id=job.clip_id,
+                mode=job.mode,
+                scheduled_for=scheduled_str,
+            )
+            post_ids.append(pid)
+            log.info(
+                "pipeline: queued post id=%d clip_id=%s platform=%s/%s handle=%s render=%s",
+                pid, job.clip_id, platform, layout, acct["handle"], result.output_path.name,
             )
 
     return post_ids

@@ -31,12 +31,16 @@ def create_database():
 
 
     # MARKERS
+    # `kind` distinguishes hotkey source: F8 = talking_head, F9 = gameplay.
+    # Downstream picks the render layout from this (square fill vs face+game split).
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS markers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         streamer_id INTEGER,
         recording_id INTEGER NOT NULL,
         timestamp INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'talking_head'
+            CHECK(kind IN ('talking_head','gameplay')),
         note TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(streamer_id) REFERENCES streamers(id) ON DELETE SET NULL,
@@ -144,6 +148,8 @@ def create_database():
         zernio_account_id TEXT NOT NULL UNIQUE,
         profile_id TEXT,
         active INTEGER NOT NULL DEFAULT 1,
+        layout TEXT NOT NULL DEFAULT 'vertical'
+            CHECK(layout IN ('vertical','square','split')),
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
     """)

@@ -57,6 +57,31 @@ def check_ffmpeg(required: bool = True) -> None:
     log.warning("healthcheck: %s", msg)
 
 
+def check_libass(required: bool = False) -> None:
+    """Probe and cache ffmpeg's libass `subtitles` filter availability.
+
+    Not required — caption-burn falls back to .ass sidecars if libass is
+    missing. But probing at startup keeps the per-clip path off the cold
+    subprocess path: on Windows the first ffmpeg invocation can hit a
+    Defender scan that exceeded the old 10 s per-clip timeout, which
+    silently disabled captions on the first clip of every session.
+    """
+    from zerino.processors._captions import prewarm_subtitles_filter
+    available = prewarm_subtitles_filter()
+    if available:
+        log.info("healthcheck: libass subtitles filter OK")
+        return
+    msg = (
+        "ffmpeg lacks the libass `subtitles` filter — captions will be written "
+        "as .ass sidecars instead of burned into the video. Install an "
+        "ffmpeg build with libass: macOS `brew reinstall ffmpeg`, "
+        "Windows use the BtbN/FFmpeg-Builds full builds."
+    )
+    if required:
+        raise HealthcheckError(msg)
+    log.warning("healthcheck: %s", msg)
+
+
 def check_zernio_api_key(required: bool = True) -> None:
     """Verify ZERNIO_API_KEY is set in the environment."""
     if ZERNIO_API_KEY:
@@ -74,6 +99,7 @@ def check_zernio_api_key(required: bool = True) -> None:
 def run_capture_healthcheck() -> None:
     """Checks the capture daemon needs to pass before starting."""
     check_ffmpeg(required=True)
+    check_libass(required=False)  # warm the per-process cache; non-fatal
     # API key NOT required for capture — capture only writes DB rows.
     # Scheduler is the one that talks to Zernio.
 
@@ -81,6 +107,7 @@ def run_capture_healthcheck() -> None:
 def run_scheduler_healthcheck() -> None:
     """Checks the scheduler daemon needs to pass before starting."""
     check_ffmpeg(required=True)   # scheduler renders before posting
+    check_libass(required=False)  # warm the per-process cache; non-fatal
     check_zernio_api_key(required=True)
 
 

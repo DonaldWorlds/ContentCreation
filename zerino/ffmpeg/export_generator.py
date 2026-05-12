@@ -82,6 +82,193 @@ class ExportGenerator:
             parts.append(f"afade=t=out:st={fade_out_st:.3f}:d={AUDIO_FADE_OUT_SEC}")
         return ",".join(parts)
 
+    def run_export_from_source(
+        self,
+        source_path,
+        output_path,
+        start: float,
+        end: float,
+        platform: str = "tiktok",
+        style: str = "talking_head",
+        subtitles_path=None,
+        layout: str = "vertical",
+    ):
+        """One-pass accurate-seek re-encode from a long source recording.
+
+        Replaces the older two-stage (stream-copy cut → re-encode export)
+        flow which produced wonky-start motion on Windows. The intermediate
+        cut had timestamps the Windows decoder handled poorly; baking
+        cut+crop+caption+encode into one ffmpeg invocation from the source
+        eliminates that surface entirely.
+
+        Seek pattern: `-ss before -i` for fast keyframe jump, `-ss after -i`
+        for accurate decode-to-frame. A short pre-roll keeps the encoder's
+        rate control warm before the actual content begins.
+        """
+        source_path = Path(source_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source file not found: {source_path}")
+        if end <= start:
+            raise ValueError(f"Invalid range: start={start} end={end}")
+
+        duration = end - start
+        pre_roll = min(2.0, start)
+
+        # Probe the source for w/h/fps. Override duration with the slice's
+        # duration so audio fade-out timing is correct for the OUTPUT clip.
+        metadata = probe_metadata(source_path)
+        metadata["duration"] = duration
+
+        config = build_processing_config(metadata, platform=platform, style=style, layout=layout)
+        vf = self.build_filter(metadata, config)
+
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            # Burn captions LAST so they aren't tinted by the eq color bump.
+            # Pass the canvas size so libass's original_size matches the .ass
+            # file's PlayResX/PlayResY (otherwise captions render the wrong size).
+            vf = (
+                f"{vf},"
+                f"{subtitles_filter(Path(subtitles_path), play_res_x=config['canvas_width'], play_res_y=config['canvas_height'])}"
+            )
+
+        af = self.build_audio_filter(duration)
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-ss", f"{start - pre_roll:.3f}",
+            "-i", str(source_path),
+            "-ss", f"{pre_roll:.3f}",
+            "-t", f"{duration:.3f}",
+            "-vf", vf,
+            "-af", af,
+            "-c:v", "libx264",
+            "-preset", config.get("preset", "slow"),
+            "-crf", str(config.get("crf", 20)),
+            "-c:a", "aac",
+            "-b:a", config.get("audio_bitrate", "192k"),
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            raise Exception(result.stderr)
+        return str(output_path)
+
+    def run_split_export_from_source(
+        self,
+        source_path,
+        output_path,
+        start: float,
+        end: float,
+        face_box: tuple[int, int, int, int],
+        game_box: tuple[int, int, int, int],
+        canvas_width: int = 1080,
+        canvas_height: int = 1920,
+        platform: str = "tiktok",
+        subtitles_path=None,
+        margin_v_for_subs: int | None = None,
+    ):
+        """One-pass face+gameplay split (vstack) render from a long source.
+
+        `face_box` and `game_box` are (x, y, w, h) crops on the SOURCE frame.
+        Each is scaled+center-cropped to fill canvas_width × (canvas_height / 2)
+        so the two halves stack flush. Captions (if any) are burned onto the
+        composed canvas via filter_complex's final node.
+
+        Audio uses the same loudnorm + fades chain as the standard export.
+        """
+        source_path = Path(source_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source file not found: {source_path}")
+        if end <= start:
+            raise ValueError(f"Invalid range: start={start} end={end}")
+        if canvas_height % 2 != 0:
+            raise ValueError(f"canvas_height must be even for vstack, got {canvas_height}")
+
+        duration = end - start
+        pre_roll = min(2.0, start)
+        half_h = canvas_height // 2
+
+        fx, fy, fw, fh = face_box
+        gx, gy, gw, gh = game_box
+
+        scaler = "lanczos"
+        fps = 60
+
+        # Each half: source crop → eq color bump → scale (increase) → center crop → fps.
+        # eq is applied BEFORE the final crop so libass-burned subs (added later) aren't tinted.
+        face_chain = (
+            f"crop={fw}:{fh}:{fx}:{fy},"
+            f"{COLOR_FILTER},"
+            f"scale={canvas_width}:{half_h}:flags={scaler}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{half_h},"
+            f"setsar=1,fps={fps}"
+        )
+        game_chain = (
+            f"crop={gw}:{gh}:{gx}:{gy},"
+            f"{COLOR_FILTER},"
+            f"scale={canvas_width}:{half_h}:flags={scaler}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{half_h},"
+            f"setsar=1,fps={fps}"
+        )
+
+        graph_parts = [
+            f"[0:v]split=2[fa][ga]",
+            f"[fa]{face_chain}[face]",
+            f"[ga]{game_chain}[game]",
+            "[face][game]vstack=inputs=2[stacked]",
+        ]
+
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            sub = subtitles_filter(
+                Path(subtitles_path),
+                play_res_x=canvas_width, play_res_y=canvas_height,
+            )
+            graph_parts.append(f"[stacked]{sub}[v]")
+            video_map = "[v]"
+        else:
+            video_map = "[stacked]"
+
+        filter_complex = ";".join(graph_parts)
+        af = self.build_audio_filter(duration)
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-ss", f"{start - pre_roll:.3f}",
+            "-i", str(source_path),
+            "-ss", f"{pre_roll:.3f}",
+            "-t", f"{duration:.3f}",
+            "-filter_complex", filter_complex,
+            "-map", video_map,
+            "-map", "0:a",
+            "-af", af,
+            "-c:v", "libx264",
+            "-preset", "slow",
+            "-crf", "20",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            raise Exception(result.stderr)
+        return str(output_path)
+
     def run_export(self, input_path, output_path, platform="tiktok", style="talking_head", subtitles_path=None):
         input_path = Path(input_path)
         output_path = Path(output_path)
