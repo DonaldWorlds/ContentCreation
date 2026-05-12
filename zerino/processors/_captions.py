@@ -260,7 +260,7 @@ def transcribe_source_to_segments(
     source_path: Path,
     start: float,
     end: float,
-    language: str | None = "en",
+    language: str | None = None,
 ) -> list[Segment]:
     """Whisper-once entry point: extract audio, transcribe, return karaoke
     segments WITHOUT writing any .ass file.
@@ -270,8 +270,11 @@ def transcribe_source_to_segments(
     Each target then calls `write_ass_from_segments` with its own canvas
     + MarginV — that's a few KB of disk I/O, not another transcription.
 
-    `language` defaults to "en" to skip Whisper's per-segment language
-    detection pass (~3s saved on every clip). Pass None to auto-detect.
+    `language=None` (default) lets Whisper auto-detect per segment. We
+    previously hard-coded "en" as a ~3s speed optimization, but that
+    forced English transcription on borderline / non-speech segments and
+    occasionally produced hallucinated words. Auto-detect is the safer
+    default; pass an explicit code to override.
     """
     slice_path = source_path.parent / f".__transcribe_slice_{int(start)}_{int(end)}.wav"
     try:
@@ -283,7 +286,7 @@ def transcribe_source_to_segments(
 
 def _transcribe_audio_to_segments(
     audio_path: Path,
-    language: str | None = "en",
+    language: str | None = None,
 ) -> list[Segment]:
     """Run Whisper on a pre-extracted audio file; return karaoke segments."""
     model = _get_whisper()

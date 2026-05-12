@@ -42,11 +42,24 @@ CANVAS_HEIGHT = 1920
 HALF_HEIGHT = CANVAS_HEIGHT // 2  # 960
 
 # Source crop boxes — (x, y, w, h) on the original 1920x1080 recording.
-# FACE_BOX: bottom-left 480x270 overlay (OBS default facecam position the
-# user confirmed). GAME_BOX: the right 1440x1080 area, which excludes the
-# facecam region entirely.
-FACE_BOX = (0, 810, 480, 270)
-GAME_BOX = (480, 0, 1440, 1080)
+#
+# FACE_BOX is the bottom-LEFT QUADRANT of the canvas (960x540 = half-width,
+# half-height). Previously sized 480x270, which gave the face only ~130k
+# source pixels to upscale into a 1080x960 panel — a 3.5x linear upscale
+# that produced "1995 webcam" quality. Quadrupling the source region to
+# 960x540 = 518k source pixels and only 1.8x linear upscale = visibly
+# sharper output, especially after the hqdn3d denoise + libx264 + tune
+# film + AQ tuning landed alongside this coord change.
+#
+# GAME_BOX is now the right HALF of the canvas (960x1080), since the
+# facecam takes up the bottom-left quadrant. Gameplay must be visible in
+# this region in your OBS scene (Game Capture set to fill the canvas
+# behind the webcam works fine — the webcam just sits on top).
+#
+# To match these constants, in OBS Edit Transform for your webcam:
+#   Position X = 0, Position Y = 540, Bounding Box Size = 960 x 540
+FACE_BOX = (0, 540, 960, 540)
+GAME_BOX = (960, 0, 960, 1080)
 
 # Captions just below the seam (y=960) — over the top of the gameplay half
 # where they're readable without covering the face. Alignment=8 (top-center)

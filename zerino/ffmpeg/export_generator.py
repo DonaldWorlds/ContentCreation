@@ -46,12 +46,48 @@ PIX_FMT = "yuv420p"
 # before perceptual gains plateau. Bumped from 192k.
 AUDIO_BITRATE = "256k"
 
-# Sharpening pass for the split layout's face half: the facecam is upscaled
-# from a small source crop (e.g. 480x270 -> 1080x960, ~3.5x zoom per
-# dimension), and lanczos upscales look soft because interpolation can't
-# manufacture detail. A light luma-only unsharp restores perceived
-# sharpness without producing chroma ringing on faces.
-SPLIT_FACE_UNSHARP = "unsharp=5:5:0.8:5:5:0.0"
+# Light denoise BEFORE the face upscale — webcam sensor noise is high-
+# entropy and tricks x264's adaptive quantization into spending bits on
+# random grain instead of face features. hqdn3d cleans the noise cheaply
+# (it's the fastest ffmpeg denoiser; nlmeans/atadenoise are higher quality
+# but 10-50x slower). Tuning: luma_spatial=1.5 chroma_spatial=1.5
+# luma_temporal=6 chroma_temporal=6 = gentle, won't oversmooth skin texture.
+SPLIT_FACE_DENOISE = "hqdn3d=1.5:1.5:6:6"
+
+# Sharpening pass for the split layout's face half, AFTER the denoise+scale
+# chain so we sharpen real detail instead of amplified noise. luma_amount
+# dropped 0.8 -> 0.5 because the upstream denoise removes the noise floor
+# that the earlier 0.8 was compensating for; 0.5 produces less ringing on
+# skin / hair edges.
+SPLIT_FACE_UNSHARP = "unsharp=5:5:0.5:5:5:0.0"
+
+# Split renders override the auto-detected hardware encoder and use libx264
+# with film-tuned adaptive quantization. The face upscale + skin tones +
+# the hard split-stack architecture all benefit from libx264's superior
+# per-bit efficiency over VideoToolbox/NVENC at the same bitrate. We trade
+# ~5x encode speed for materially cleaner skin/eyes. -tune film treats
+# webcam grain as film grain (don't waste bits flattening it); aq-mode=3
+# + aq-strength=1.0 distributes bits more uniformly across the frame so
+# the face half doesn't get starved by the gameplay half's complexity.
+SPLIT_VIDEO_ENCODER = "libx264"
+SPLIT_VIDEO_ENCODER_ARGS = [
+    "-preset", "slow",
+    "-tune", "film",          # psy-rd defaults are already tuned for film grain
+    "-profile:v", "high",
+    "-level", "4.2",
+    # aq-mode 3 (auto-variance) + strength 1.0 distributes bits more evenly
+    # across the face/game halves. Colon is the x264-params separator; the
+    # values themselves must not contain colons.
+    "-x264-params", "aq-mode=3:aq-strength=1.0",
+]
+
+# Split layouts get more bitrate headroom than the standard 15M target,
+# because the face half is doing a brutal upscale and the encoder needs
+# room to preserve skin/eyes without starving gameplay. 20M peak is still
+# below TikTok's ~25M re-encode threshold.
+SPLIT_TARGET_BITRATE = "20M"
+SPLIT_MAX_BITRATE = "25M"
+SPLIT_BUFFER_SIZE = "40M"
 
 
 # --- Hardware encoder detection ---------------------------------------------
@@ -308,25 +344,28 @@ class ExportGenerator:
         scaler = "lanczos"
         fps = 60
 
-        # Each half: source crop → eq color bump → scale (increase) → center crop → fps.
-        # eq is applied BEFORE the final crop so libass-burned subs (added later) aren't tinted.
-        # Face chain ends with `unsharp` because the small facecam region gets
-        # upscaled ~3x; lanczos interpolation looks soft and unsharp restores
-        # perceived edge detail. Game chain skips unsharp — it's a downscale
-        # and sharpening would just amplify noise.
+        # Face chain (forensic-tuned filter order):
+        #   crop → DENOISE before upscale (so we don't amplify noise) →
+        #   scale (lanczos, aspect-fit) → final crop → EQ AT OUTPUT RES
+        #   (banding from contrast/gamma bump doesn't get magnified by the
+        #   3.5x upscale anymore) → unsharp (mild, 0.5) → setsar/fps.
+        #
+        # Game chain (no denoise — it's a downscale, denoise would oversmooth
+        # textures): same order, eq moved to AFTER scale for consistency.
         face_chain = (
             f"crop={fw}:{fh}:{fx}:{fy},"
-            f"{COLOR_FILTER},"
+            f"{SPLIT_FACE_DENOISE},"
             f"scale={canvas_width}:{half_h}:flags={scaler}:force_original_aspect_ratio=increase,"
             f"crop={canvas_width}:{half_h},"
+            f"{COLOR_FILTER},"
             f"{SPLIT_FACE_UNSHARP},"
             f"setsar=1,fps={fps}"
         )
         game_chain = (
             f"crop={gw}:{gh}:{gx}:{gy},"
-            f"{COLOR_FILTER},"
             f"scale={canvas_width}:{half_h}:flags={scaler}:force_original_aspect_ratio=increase,"
             f"crop={canvas_width}:{half_h},"
+            f"{COLOR_FILTER},"
             f"setsar=1,fps={fps}"
         )
 
@@ -362,11 +401,16 @@ class ExportGenerator:
             "-map", video_map,
             "-map", "0:a",
             "-af", af,
-            "-c:v", VIDEO_ENCODER,
-            *VIDEO_ENCODER_ARGS,
-            "-b:v", TARGET_BITRATE,
-            "-maxrate", MAX_BITRATE,
-            "-bufsize", BUFFER_SIZE,
+            # SPLIT-SPECIFIC ENCODER: libx264 + tune film + AQ tuning gives
+            # materially better skin-tone preservation than VideoToolbox /
+            # NVENC at the same bitrate. We force it here (overriding the
+            # auto-detected HW encoder) because face upscale + skin = where
+            # encoder efficiency matters most.
+            "-c:v", SPLIT_VIDEO_ENCODER,
+            *SPLIT_VIDEO_ENCODER_ARGS,
+            "-b:v", SPLIT_TARGET_BITRATE,
+            "-maxrate", SPLIT_MAX_BITRATE,
+            "-bufsize", SPLIT_BUFFER_SIZE,
             "-pix_fmt", PIX_FMT,
             "-c:a", "aac",
             "-b:a", AUDIO_BITRATE,
