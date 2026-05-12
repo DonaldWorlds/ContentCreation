@@ -23,6 +23,7 @@ from zerino.models import ClipJob
 from zerino.processors._captions import (
     has_subtitles_filter,
     transcribe_source_slice,
+    write_ass_from_segments,
 )
 from zerino.processors.base import Processor, ProcessorResult
 
@@ -59,11 +60,11 @@ class SquareProcessor(Processor):
                 f"Supported: {SQUARE_PLATFORMS}"
             )
 
-        # Distinct filename suffix so square + vertical for the same clip can
-        # coexist in the same renders/<platform>/ directory without collision.
-        base_name = f"{source_path.stem}_clip_{int(job.start)}_{int(job.end)}"
-        output_path = output_dir / f"{base_name}__{platform}__square.mp4"
-        ass_path = output_dir / f"{base_name}__{platform}__square.ass"
+        # Layout-keyed filename — same render serves every platform on this
+        # layout, output_dir is `renders/square/`, no per-platform suffix.
+        base_name = f"{source_path.stem}_clip_{int(job.start)}_{int(job.end)}__square"
+        output_path = output_dir / f"{base_name}.mp4"
+        ass_path = output_dir / f"{base_name}.ass"
 
         self.log.info(
             "square render start: clip_id=%s src=%s [%.2fs-%.2fs] -> %s (platform=%s)",
@@ -77,6 +78,12 @@ class SquareProcessor(Processor):
             ass_path = Path(job.transcript_path)
             owns_ass = False
             self.log.info("reusing pre-computed transcript: %s", ass_path)
+        elif "karaoke_segments" in job.metadata:
+            # `in`-check, not truthy: empty list = silent clip, still cached.
+            chunk_count = write_ass_from_segments(
+                job.metadata["karaoke_segments"], ass_path,
+                play_res_x=PLAY_RES_X, play_res_y=PLAY_RES_Y,
+            )
         else:
             chunk_count = transcribe_source_slice(
                 source_path, ass_path, job.start, job.end,

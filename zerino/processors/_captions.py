@@ -124,12 +124,55 @@ def _segments_to_ass(
     return "".join(out)
 
 
+def _detect_whisper_device() -> tuple[str, str]:
+    """Pick the fastest faster-whisper backend available on this machine.
+
+    Order:
+      1. CUDA (NVIDIA GPU) — float16, ~10x CPU
+      2. CPU int8           — fallback, real-time on Apple Silicon
+
+    Apple Silicon MPS isn't supported by faster-whisper / CTranslate2 yet
+    (as of late 2025); CoreML support exists in upstream whisper.cpp but
+    not faster-whisper. So Mac users still land on CPU int8 for now —
+    which is fine: M-series CPUs do small/int8 at near-realtime.
+    """
+    try:
+        # ctranslate2 ships with faster-whisper; the IDE may flag this on
+        # machines without the venv activated, but it's always present at
+        # runtime when faster-whisper itself is installed.
+        from ctranslate2 import get_cuda_device_count
+        if get_cuda_device_count() > 0:
+            return ("cuda", "float16")
+    except Exception:  # noqa: BLE001
+        pass
+    return ("cpu", "int8")
+
+
 def _get_whisper():
     global _whisper_model
     if _whisper_model is None:
         from faster_whisper import WhisperModel
-        _log.info("loading faster-whisper model size=%s (first run downloads ~500MB)", WHISPER_MODEL_SIZE)
-        _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+        device, compute_type = _detect_whisper_device()
+        _log.info(
+            "loading faster-whisper size=%s device=%s compute=%s "
+            "(first run downloads ~500MB)",
+            WHISPER_MODEL_SIZE, device, compute_type,
+        )
+        try:
+            _whisper_model = WhisperModel(
+                WHISPER_MODEL_SIZE, device=device, compute_type=compute_type,
+            )
+        except Exception as e:  # noqa: BLE001
+            # CUDA toolkit / cuDNN missing or version-mismatched — fall back
+            # rather than dying. Logging the reason helps the user fix it
+            # later if they expected GPU.
+            _log.warning(
+                "whisper init failed on device=%s (%s) — falling back to CPU int8",
+                device, e,
+            )
+            _whisper_model = WhisperModel(
+                WHISPER_MODEL_SIZE, device="cpu", compute_type="int8",
+            )
     return _whisper_model
 
 
@@ -168,10 +211,12 @@ def _build_karaoke_segments(words: list) -> list[Segment]:
 def extract_audio_slice(source_path: Path, slice_path: Path, start: float, end: float) -> None:
     """Extract a short audio-only slice from a long source for transcription.
 
-    Used by the one-pass clipping path so Whisper sees clean audio of the
-    requested window without first cutting a wonky stream-copy video
-    intermediate. Audio-only is fast (no video re-encode) and 96 kbps AAC
-    is plenty for Whisper accuracy.
+    Output is WAV PCM 16-bit 16 kHz mono — Whisper's native internal format,
+    so faster-whisper skips its decode/resample pass entirely. Lossless from
+    the source (no AAC re-encode loss before Whisper sees it), faster than
+    AAC encoding, and accuracy on noisy gameplay backgrounds improves
+    slightly because the borderline-quiet phonemes aren't smeared by lossy
+    pre-compression.
 
     Two-stage seek: `-ss before -i` jumps to the nearest keyframe (fast),
     `-ss after -i` decodes accurately from there. The resulting file starts
@@ -190,8 +235,9 @@ def extract_audio_slice(source_path: Path, slice_path: Path, start: float, end: 
         "-ss", f"{pre_roll:.3f}",
         "-t", f"{duration:.3f}",
         "-vn",
-        "-c:a", "aac",
-        "-b:a", "96k",
+        "-ac", "1",          # mono
+        "-ar", "16000",      # 16 kHz — Whisper's native rate
+        "-c:a", "pcm_s16le", # 16-bit PCM — lossless, smaller than 24-bit
         str(slice_path),
     ]
 
@@ -208,6 +254,82 @@ def extract_audio_slice(source_path: Path, slice_path: Path, start: float, end: 
             f"audio slice extraction failed (rc={result.returncode}): "
             f"{result.stderr.strip()[:500]}"
         )
+
+
+def transcribe_source_to_segments(
+    source_path: Path,
+    start: float,
+    end: float,
+    language: str | None = "en",
+) -> list[Segment]:
+    """Whisper-once entry point: extract audio, transcribe, return karaoke
+    segments WITHOUT writing any .ass file.
+
+    Used by Router to run the expensive Whisper pass exactly once per
+    ClipJob, even when the job fans out to many (platform, layout) targets.
+    Each target then calls `write_ass_from_segments` with its own canvas
+    + MarginV — that's a few KB of disk I/O, not another transcription.
+
+    `language` defaults to "en" to skip Whisper's per-segment language
+    detection pass (~3s saved on every clip). Pass None to auto-detect.
+    """
+    slice_path = source_path.parent / f".__transcribe_slice_{int(start)}_{int(end)}.wav"
+    try:
+        extract_audio_slice(source_path, slice_path, start, end)
+        return _transcribe_audio_to_segments(slice_path, language=language)
+    finally:
+        slice_path.unlink(missing_ok=True)
+
+
+def _transcribe_audio_to_segments(
+    audio_path: Path,
+    language: str | None = "en",
+) -> list[Segment]:
+    """Run Whisper on a pre-extracted audio file; return karaoke segments."""
+    model = _get_whisper()
+    _log.info("transcribing %s (lang=%s)", audio_path.name, language or "auto")
+    segments_iter, info = model.transcribe(
+        str(audio_path),
+        beam_size=5,
+        word_timestamps=True,
+        language=language,
+    )
+    karaoke: list[Segment] = []
+    for segment in segments_iter:
+        words = list(getattr(segment, "words", None) or [])
+        if not words:
+            karaoke.append(Segment(start=segment.start, end=segment.end, text=segment.text.strip()))
+            continue
+        karaoke.extend(_build_karaoke_segments(words))
+    _log.info(
+        "transcribed %d karaoke line(s), %d words/chunk, lang=%s",
+        len(karaoke), WORDS_PER_CHUNK, info.language,
+    )
+    return karaoke
+
+
+def write_ass_from_segments(
+    segments: list[Segment],
+    ass_path: Path,
+    play_res_x: int = PLAY_RES_X,
+    play_res_y: int = PLAY_RES_Y,
+    margin_v: int | None = None,
+) -> int:
+    """Write a styled .ass file from already-transcribed karaoke segments.
+
+    Cheap (a few KB of disk I/O) — every (platform, layout) target calls
+    this once with its own canvas + MarginV after the shared Whisper pass.
+    Returns dialogue-line count.
+    """
+    ass_path.write_text(
+        _segments_to_ass(
+            segments,
+            play_res_x=play_res_x, play_res_y=play_res_y,
+            margin_v=margin_v,
+        ),
+        encoding="utf-8",
+    )
+    return len(segments)
 
 
 def transcribe_source_slice(
@@ -228,7 +350,7 @@ def transcribe_source_slice(
     auto-selected MarginV (used by SplitProcessor to place captions at the
     seam between face and gameplay halves). Caller owns `ass_path` lifecycle.
     """
-    slice_path = ass_path.with_suffix(".__slice.m4a")
+    slice_path = ass_path.with_suffix(".__slice.wav")
     try:
         extract_audio_slice(source_path, slice_path, start, end)
         return transcribe_to_ass(

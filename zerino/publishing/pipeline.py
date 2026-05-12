@@ -132,12 +132,14 @@ def process_and_queue_clip_job(job: ClipJob) -> list[int]:
     for platform, accounts in accounts_by_platform.items():
         for acct in accounts:
             layout = job_layout or (acct.get("layout") or "vertical").lower()
-            result = renders.get((platform, layout))
+            # Renders are now layout-keyed (one render shared across every
+            # platform using that layout). See Router.route_clip_job.
+            result = renders.get(layout)
             if result is None:
                 log.warning(
-                    "pipeline: no render for (platform=%s, layout=%s) — "
+                    "pipeline: no render for layout=%s on platform=%s — "
                     "skipping account handle=%s id=%s (render failed earlier)",
-                    platform, layout, acct.get("handle"), acct.get("id"),
+                    layout, platform, acct.get("handle"), acct.get("id"),
                 )
                 continue
 

@@ -1,8 +1,11 @@
 import subprocess
 import json
+import logging
 from pathlib import Path
 from zerino.ffmpeg.ffmpeg_utils import probe_metadata
 from zerino.composition.composition_rules import build_processing_config
+
+_log = logging.getLogger("zerino.ffmpeg.export_generator")
 
 # --- Quality tuning (Phase 2.5) ---------------------------------------------
 # Subtle color/contrast bump — makes flat stream captures pop without looking
@@ -49,6 +52,69 @@ AUDIO_BITRATE = "256k"
 # manufacture detail. A light luma-only unsharp restores perceived
 # sharpness without producing chroma ringing on faces.
 SPLIT_FACE_UNSHARP = "unsharp=5:5:0.8:5:5:0.0"
+
+
+# --- Hardware encoder detection ---------------------------------------------
+# Probe ffmpeg's built-in encoder list at import time and cache the result.
+# Order of preference: NVENC (NVIDIA, fastest by far) > VideoToolbox (Mac
+# GPU, fast + clean) > libx264 (CPU fallback, slowest but most consistent).
+# At 15 Mbps target bitrate the quality delta between any of these is
+# imperceptible on 1080p short-form; the throughput delta is 5-20x.
+
+def _probe_available_encoders() -> set[str]:
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return set()
+    # Each encoder line looks like " V..... libx264 ..." — we only need the name.
+    found: set[str] = set()
+    for line in (out.stdout or "").splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0].startswith("V"):
+            found.add(parts[1])
+    return found
+
+
+def _pick_video_encoder() -> tuple[str, list[str]]:
+    """Return (encoder_name, extra_args) for the fastest h264 encoder available.
+
+    extra_args are encoder-specific flags appended AFTER the universal
+    bitrate flags (-b:v / -maxrate / -bufsize) — used to pin preset/quality
+    knobs that don't translate across encoders.
+    """
+    available = _probe_available_encoders()
+
+    if "h264_nvenc" in available:
+        # NVENC: preset p5 (slow-ish) gives near-x264-slow quality with a
+        # massive speed win. rc=vbr_hq + multipass=fullres lock in quality.
+        return ("h264_nvenc", [
+            "-preset", "p5",
+            "-tune", "hq",
+            "-rc", "vbr",
+            "-multipass", "fullres",
+            "-spatial-aq", "1",
+        ])
+
+    if "h264_videotoolbox" in available:
+        # VideoToolbox: -q:v 60 (range 0-100) maps to ~CRF 20-ish but we're
+        # in bitrate mode anyway; -allow_sw 1 lets it fall back to software
+        # if the GPU is busy. No preset concept — speed is fixed.
+        return ("h264_videotoolbox", [
+            "-allow_sw", "1",
+            "-realtime", "0",  # 0 = quality > speed (default on Apple Silicon)
+        ])
+
+    # CPU fallback — libx264 is always present in any reasonable ffmpeg build.
+    return ("libx264", [
+        "-preset", ENCODE_PRESET,
+    ])
+
+
+VIDEO_ENCODER, VIDEO_ENCODER_ARGS = _pick_video_encoder()
+_log.info("video encoder selected: %s", VIDEO_ENCODER)
 
 
 class ExportGenerator:
@@ -180,8 +246,8 @@ class ExportGenerator:
             "-t", f"{duration:.3f}",
             "-vf", vf,
             "-af", af,
-            "-c:v", "libx264",
-            "-preset", ENCODE_PRESET,
+            "-c:v", VIDEO_ENCODER,
+            *VIDEO_ENCODER_ARGS,
             "-b:v", TARGET_BITRATE,
             "-maxrate", MAX_BITRATE,
             "-bufsize", BUFFER_SIZE,
@@ -296,8 +362,8 @@ class ExportGenerator:
             "-map", video_map,
             "-map", "0:a",
             "-af", af,
-            "-c:v", "libx264",
-            "-preset", ENCODE_PRESET,
+            "-c:v", VIDEO_ENCODER,
+            *VIDEO_ENCODER_ARGS,
             "-b:v", TARGET_BITRATE,
             "-maxrate", MAX_BITRATE,
             "-bufsize", BUFFER_SIZE,
@@ -340,8 +406,8 @@ class ExportGenerator:
             "-i", str(input_path),
             "-vf", vf,
             "-af", af,
-            "-c:v", "libx264",
-            "-preset", ENCODE_PRESET,
+            "-c:v", VIDEO_ENCODER,
+            *VIDEO_ENCODER_ARGS,
             "-b:v", TARGET_BITRATE,
             "-maxrate", MAX_BITRATE,
             "-bufsize", BUFFER_SIZE,

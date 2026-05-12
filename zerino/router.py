@@ -23,6 +23,10 @@ from pathlib import Path
 
 from zerino.config import RENDERS_DIR, get_logger
 from zerino.models import ClipJob
+from zerino.processors._captions import (
+    has_subtitles_filter,
+    transcribe_source_to_segments,
+)
 from zerino.processors.base import ProcessorResult
 from zerino.processors.split import SPLIT_PLATFORMS, SplitProcessor
 from zerino.processors.square import SQUARE_PLATFORMS, SquareProcessor
@@ -104,50 +108,89 @@ class Router:
         self,
         job: ClipJob,
         targets: list[tuple[str, str]] | None = None,
-    ) -> dict[tuple[str, str], ProcessorResult]:
+    ) -> dict[str, ProcessorResult]:
         """One-pass render: render the clip's window from `job.source_path`
-        for each (platform, layout) target.
+        ONCE per unique layout, regardless of how many platforms share it.
 
-        `targets` is a list of (platform, layout) pairs. If None, defaults
-        to (platform, 'vertical') for every platform in `job.platforms`
-        (backward-compatible behavior).
+        `targets` is still a list of (platform, layout) pairs (the call
+        shape callers think in), but the actual render fans out by LAYOUT
+        only — same layout = same render bytes, so producing it once and
+        having every TikTok / YT Shorts / Reels / Twitter post for that
+        layout reference the same file saves 3-4x encode time and disk on
+        multi-platform fan-outs of identical content.
 
-        Returns: {(platform, layout): ProcessorResult} for each target that
-        succeeded. Per-target failures are logged and skipped — they do not
-        abort the batch.
+        `targets` defaults to (platform, 'vertical') for every platform in
+        job.platforms (legacy behavior).
+
+        Returns: {layout: ProcessorResult} for each unique layout that
+        succeeded. Per-layout failures are logged and skipped — they do
+        not abort the batch.
         """
         if targets is None:
             targets = [(p.lower(), "vertical") for p in job.platforms]
 
-        # De-duplicate while preserving order — caller often passes (platform,
-        # layout) pairs derived from many accounts that share renders.
-        seen: set[tuple[str, str]] = set()
+        # De-duplicate by LAYOUT. Each platform sharing that layout reads
+        # the same render. We still remember one "representative platform"
+        # per layout to pass to the processor's existing signature (it uses
+        # it only for the supported-platforms guard, not for the encode).
+        seen_layouts: set[str] = set()
         unique_targets: list[tuple[str, str]] = []
         for platform, layout in targets:
-            key = (platform.lower(), layout)
-            if key in seen:
+            if layout in seen_layouts:
                 continue
-            seen.add(key)
-            unique_targets.append(key)
+            seen_layouts.add(layout)
+            unique_targets.append((platform.lower(), layout))
 
-        results: dict[tuple[str, str], ProcessorResult] = {}
+        # Whisper-once cache: transcribe a single audio slice and stash the
+        # karaoke segments on the job so each (platform, layout) target writes
+        # its own .ass from cached segments instead of re-running Whisper. The
+        # processors check job.metadata['karaoke_segments'] first and only fall
+        # back to per-target transcription if it's missing.
+        if (
+            unique_targets
+            and has_subtitles_filter()
+            and "karaoke_segments" not in job.metadata
+            and job.transcript_path is None
+        ):
+            try:
+                segments = transcribe_source_to_segments(
+                    job.source_path, job.start, job.end,
+                )
+                job.metadata["karaoke_segments"] = segments
+                self.log.info(
+                    "route_clip_job: transcribed once for %d target(s) — %d karaoke line(s) cached",
+                    len(unique_targets), len(segments),
+                )
+            except Exception as e:  # noqa: BLE001
+                # Don't fail the whole batch if one shared transcription
+                # blows up — let each processor fall back to its own.
+                self.log.warning(
+                    "route_clip_job: shared transcription failed (%s); "
+                    "processors will transcribe per-target",
+                    e,
+                )
+
+        results: dict[str, ProcessorResult] = {}
 
         for platform, layout in unique_targets:
             try:
                 processor, ptype = self._processor_for(platform, layout=layout)
-                output_dir = RENDERS_DIR / platform
+                # Layout-keyed output dir — one render shared by every
+                # platform on that layout. (Old per-platform dirs are
+                # orphaned in place; cleanup CLI removes them by age.)
+                output_dir = RENDERS_DIR / layout
                 self.log.info(
-                    "route_clip_job: clip_id=%s src=%s [%.2fs-%.2fs] -> %s/%s (type=%s)",
+                    "route_clip_job: clip_id=%s src=%s [%.2fs-%.2fs] -> layout=%s (type=%s, rep_platform=%s)",
                     job.clip_id, job.source_path.name, job.start, job.end,
-                    platform, layout, ptype,
+                    layout, ptype, platform,
                 )
-                results[(platform, layout)] = processor.process_clip_job(
+                results[layout] = processor.process_clip_job(
                     job, platform, output_dir,
                 )
             except Exception as e:  # noqa: BLE001
                 self.log.exception(
-                    "route_clip_job failed for platform=%s layout=%s clip_id=%s: %s",
-                    platform, layout, job.clip_id, e,
+                    "route_clip_job failed for layout=%s clip_id=%s: %s",
+                    layout, job.clip_id, e,
                 )
 
         return results

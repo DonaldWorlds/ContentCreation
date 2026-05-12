@@ -30,6 +30,7 @@ from zerino.models import ClipJob
 from zerino.processors._captions import (
     has_subtitles_filter,
     transcribe_source_slice,
+    write_ass_from_segments,
 )
 from zerino.processors.base import Processor, ProcessorResult
 
@@ -77,9 +78,11 @@ class SplitProcessor(Processor):
                 f"Supported: {SPLIT_PLATFORMS}"
             )
 
-        base_name = f"{source_path.stem}_clip_{int(job.start)}_{int(job.end)}"
-        output_path = output_dir / f"{base_name}__{platform}__split.mp4"
-        ass_path = output_dir / f"{base_name}__{platform}__split.ass"
+        # Layout-keyed filename — same render serves every platform on this
+        # layout, output_dir is `renders/split/`, no per-platform suffix.
+        base_name = f"{source_path.stem}_clip_{int(job.start)}_{int(job.end)}__split"
+        output_path = output_dir / f"{base_name}.mp4"
+        ass_path = output_dir / f"{base_name}.ass"
 
         self.log.info(
             "split render start: clip_id=%s src=%s [%.2fs-%.2fs] -> %s (platform=%s)",
@@ -93,6 +96,13 @@ class SplitProcessor(Processor):
             ass_path = Path(job.transcript_path)
             owns_ass = False
             self.log.info("reusing pre-computed transcript: %s", ass_path)
+        elif "karaoke_segments" in job.metadata:
+            # `in`-check, not truthy: empty list = silent clip, still cached.
+            chunk_count = write_ass_from_segments(
+                job.metadata["karaoke_segments"], ass_path,
+                play_res_x=CANVAS_WIDTH, play_res_y=CANVAS_HEIGHT,
+                margin_v=CAPTION_MARGIN_V,
+            )
         else:
             chunk_count = transcribe_source_slice(
                 source_path, ass_path, job.start, job.end,

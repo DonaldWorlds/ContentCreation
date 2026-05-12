@@ -19,9 +19,11 @@ from zerino.config import get_logger
 from zerino.ffmpeg.export_generator import ExportGenerator
 from zerino.models import ClipJob
 from zerino.processors._captions import (
+    PLAY_RES_X, PLAY_RES_Y,
     has_subtitles_filter,
     transcribe_source_slice,
     transcribe_to_ass,
+    write_ass_from_segments,
 )
 from zerino.processors.base import Processor, ProcessorResult
 
@@ -101,9 +103,11 @@ class VerticalProcessor(Processor):
                 f"Supported: {VERTICAL_PLATFORMS}"
             )
 
-        base_name = f"{source_path.stem}_clip_{int(job.start)}_{int(job.end)}"
-        output_path = output_dir / f"{base_name}__{platform}.mp4"
-        ass_path = output_dir / f"{base_name}__{platform}.ass"
+        # Layout-keyed filename — same render is shared across every platform
+        # using this layout, so no per-platform suffix.
+        base_name = f"{source_path.stem}_clip_{int(job.start)}_{int(job.end)}__vertical"
+        output_path = output_dir / f"{base_name}.mp4"
+        ass_path = output_dir / f"{base_name}.ass"
 
         self.log.info(
             "vertical render start: clip_id=%s src=%s [%.2fs-%.2fs] -> %s (platform=%s)",
@@ -117,6 +121,15 @@ class VerticalProcessor(Processor):
             ass_path = Path(job.transcript_path)
             owns_ass = False
             self.log.info("reusing pre-computed transcript: %s", ass_path)
+        elif "karaoke_segments" in job.metadata:
+            # Router pre-transcribed for the whole fan-out — write our own
+            # canvas-correct .ass from the cached segments (no Whisper call).
+            # Use `in` not truthy-check: an empty list (silent clip, no
+            # detected speech) is still a successful transcription result.
+            chunk_count = write_ass_from_segments(
+                job.metadata["karaoke_segments"], ass_path,
+                play_res_x=PLAY_RES_X, play_res_y=PLAY_RES_Y,
+            )
         else:
             chunk_count = transcribe_source_slice(source_path, ass_path, job.start, job.end)
 
