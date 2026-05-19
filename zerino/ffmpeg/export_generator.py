@@ -1,3 +1,4 @@
+import os
 import subprocess
 import json
 import logging
@@ -6,6 +7,32 @@ from zerino.ffmpeg.ffmpeg_utils import probe_metadata
 from zerino.composition.composition_rules import build_processing_config
 
 _log = logging.getLogger("zerino.ffmpeg.export_generator")
+
+# --- Watermark / brand overlay --------------------------------------------- #
+# A single PNG composited on top of every render. Position varies by layout:
+#   vertical / square  -> bottom-center with WATERMARK_BOTTOM_MARGIN px above
+#                         the bottom edge
+#   split              -> middle, with the watermark's BOTTOM touching the
+#                         seam between face half and gameplay half. Sits in
+#                         the face half just above the seam — doesn't cover
+#                         the face content meaningfully (seam-adjacent) and
+#                         doesn't collide with captions in the gameplay half.
+#
+# Drop the PNG at WATERMARK_PATH. If missing, the render still completes;
+# a WARN is logged and the watermark step is skipped.
+# Set env ZERINO_WATERMARK_ENABLED=0 to disable site-wide.
+WATERMARK_PATH = (
+    Path(__file__).resolve().parent.parent / "assets" / "overlays"
+    / "kick_social_overlay.png"
+)
+WATERMARK_ENABLED = os.getenv("ZERINO_WATERMARK_ENABLED", "1") == "1"
+# Bottom safe-margin for vertical / square placements. 80 px on a 1920-tall
+# frame is ~4 % of canvas — clear of the platform UI bottom band.
+WATERMARK_BOTTOM_MARGIN = 80
+# Width of the watermark as a fraction of the output canvas width. 0.18 =
+# ~18 % wide on a 1080-wide canvas (~195 px). Big enough to read; small
+# enough not to dominate. Height auto-scales to preserve aspect ratio.
+WATERMARK_WIDTH_FRACTION = 0.18
 
 # --- Audio policy (S6.1, S6.2, S6.3) ---------------------------------------- #
 # Static speech leveler. Single-pass `loudnorm` was the prior chain and is
@@ -286,6 +313,59 @@ def _fps_filter(metadata: dict, target_fps: float) -> str:
     return f",fps={target_fps:g}"
 
 
+def _escape_ffmpeg_movie_path(path: Path) -> str:
+    """Escape a path for use inside an ffmpeg `movie='...'` source filter.
+    Same special-char list as the subtitles= filter (see _captions.py).
+    Windows backslashes already get converted to forward slashes upstream.
+    """
+    path_str = str(path).replace("\\", "/")
+    for ch in (":", ",", "'", "[", "]", ";"):
+        path_str = path_str.replace(ch, "\\" + ch)
+    return path_str
+
+
+def _watermark_overlay_position(layout: str) -> str:
+    """Return the `overlay=X:Y` x:y expression for the given layout.
+    ffmpeg overlay variables: W = main width, H = main height, w = overlay
+    width, h = overlay height.
+    """
+    if layout == "split":
+        # Watermark BOTTOM at H/2 (the seam between face and gameplay
+        # halves). Sits in the lower edge of the face half, just above
+        # the captions which start at MarginV=1020.
+        return "(W-w)/2:H/2-h"
+    # vertical / square — bottom-center with safe margin.
+    return f"(W-w)/2:H-h-{WATERMARK_BOTTOM_MARGIN}"
+
+
+def _watermark_graph_pieces(layout: str, canvas_width: int) -> tuple[str, str] | None:
+    """Return (movie_node, overlay_position) for splicing watermark into a
+    filter graph, or None if watermark is disabled or the file is missing.
+
+    `movie_node` is a filter-graph node that loads + scales the PNG, e.g.:
+        movie='/path/wm.png',scale=WIDTH:-1[wm]
+    Caller plugs it into their graph and references the `[wm]` label.
+
+    `overlay_position` is the `X:Y` expression for the `overlay` filter.
+    """
+    if not WATERMARK_ENABLED:
+        return None
+    if not WATERMARK_PATH.exists():
+        _log.warning(
+            "watermark missing at %s — render will skip the watermark. "
+            "Drop the PNG there (or set ZERINO_WATERMARK_ENABLED=0 to silence).",
+            WATERMARK_PATH,
+        )
+        return None
+
+    path_escaped = _escape_ffmpeg_movie_path(WATERMARK_PATH)
+    wm_width = int(canvas_width * WATERMARK_WIDTH_FRACTION)
+    # `scale=W:-1` preserves aspect ratio (height auto-computed).
+    movie_node = f"movie='{path_escaped}',scale={wm_width}:-1[wm]"
+    position = _watermark_overlay_position(layout)
+    return (movie_node, position)
+
+
 class ExportGenerator:
 
     def build_filter(self, metadata, config):
@@ -428,11 +508,24 @@ class ExportGenerator:
 
         if subtitles_path is not None:
             from zerino.processors._captions import subtitles_filter
-            # Burn captions LAST. Pass canvas size so libass's original_size
-            # matches the .ass PlayResX/Y (otherwise captions render at wrong size).
+            # Burn captions BEFORE watermark. libass's original_size matches
+            # the .ass PlayResX/Y so captions render at the right size.
             vf = (
                 f"{vf},"
                 f"{subtitles_filter(Path(subtitles_path), play_res_x=config['canvas_width'], play_res_y=config['canvas_height'])}"
+            )
+
+        # Watermark overlay (on top of everything, including burned captions).
+        # When enabled + file present, we wrap the simple comma-chain `vf`
+        # into a labeled filter graph that combines the main video with the
+        # PNG loaded by the `movie=` source filter.
+        wm_pieces = _watermark_graph_pieces(layout, config["canvas_width"])
+        if wm_pieces is not None:
+            movie_node, position = wm_pieces
+            vf = (
+                f"{movie_node};"
+                f"[0:v]{vf}[base];"
+                f"[base][wm]overlay={position}"
             )
 
         af = self.build_audio_filter(duration)
@@ -557,6 +650,7 @@ class ExportGenerator:
             f"[ga]{game_chain}[game]",
             "[face][game]vstack=inputs=2[stacked]",
         ]
+        current_label = "stacked"
 
         if subtitles_path is not None:
             from zerino.processors._captions import subtitles_filter
@@ -564,11 +658,21 @@ class ExportGenerator:
                 Path(subtitles_path),
                 play_res_x=canvas_width, play_res_y=canvas_height,
             )
-            graph_parts.append(f"[stacked]{sub}[v]")
-            video_map = "[v]"
-        else:
-            video_map = "[stacked]"
+            graph_parts.append(f"[{current_label}]{sub}[v_subs]")
+            current_label = "v_subs"
 
+        # Watermark overlay on top of subs (split layout: middle of canvas,
+        # bottom edge at the seam between face and gameplay halves).
+        wm_pieces = _watermark_graph_pieces("split", canvas_width)
+        if wm_pieces is not None:
+            movie_node, position = wm_pieces
+            graph_parts.append(movie_node)
+            graph_parts.append(
+                f"[{current_label}][wm]overlay={position}[v_wm]"
+            )
+            current_label = "v_wm"
+
+        video_map = f"[{current_label}]"
         filter_complex = ";".join(graph_parts)
         af = self.build_audio_filter(duration)
 
@@ -623,8 +727,18 @@ class ExportGenerator:
 
         if subtitles_path is not None:
             from zerino.processors._captions import subtitles_filter
-            # Burn captions LAST so they aren't tinted by the eq color bump.
             vf = f"{vf},{subtitles_filter(Path(subtitles_path))}"
+
+        # Watermark overlay (legacy path — treats every render as vertical
+        # layout since this function doesn't take a layout arg).
+        wm_pieces = _watermark_graph_pieces("vertical", config["canvas_width"])
+        if wm_pieces is not None:
+            movie_node, position = wm_pieces
+            vf = (
+                f"{movie_node};"
+                f"[0:v]{vf}[base];"
+                f"[base][wm]overlay={position}"
+            )
 
         af = self.build_audio_filter(metadata.get("duration"))
 
