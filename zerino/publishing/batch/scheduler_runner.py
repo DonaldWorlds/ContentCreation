@@ -27,8 +27,11 @@ from zerino.publishing.zernio.poster import dispatch_post
 
 log = get_logger("zerino.publishing.scheduler")
 
-# How often to sweep for stale 'processing' rows (scheduler crashed mid-dispatch).
-_STALE_RECOVERY_INTERVAL_SECONDS = 300.0
+# How often to sweep for stale 'processing' rows (dispatch crashed mid-flight).
+# 60 s + STALE_CLAIM_TIMEOUT_SECONDS=120 in posts_repository = max ~3 min
+# limbo before a stranded post is recovered to 'failed'. Was 300 s, which
+# combined with the 600 s timeout meant ~10 min before user-visible recovery.
+_STALE_RECOVERY_INTERVAL_SECONDS = 60.0
 
 # Phase 3: minimum seconds between consecutive posts to the same platform
 PLATFORM_RATE_LIMITS: dict[str, float] = {

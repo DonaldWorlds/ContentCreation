@@ -9,7 +9,12 @@ from zerino.config import DB_PATH
 # A post that's been in 'processing' longer than this is treated as stranded
 # (scheduler crashed mid-dispatch). Recovery marks it 'failed' rather than
 # auto-retrying, because we can't tell if Zernio already received it.
-STALE_CLAIM_TIMEOUT_SECONDS = 600
+#
+# 120 s = 2 minutes. Zernio API calls typically complete in <30 s; a post
+# stuck in 'processing' for >2 min strongly implies a crashed dispatcher,
+# not a slow legitimate request. Was 600 s (10 min) which combined with the
+# 300 s sweep interval produced a 10-minute limbo window after crashes.
+STALE_CLAIM_TIMEOUT_SECONDS = 120
 
 
 def _connect() -> sqlite3.Connection:
@@ -131,26 +136,37 @@ def recover_stale_claims(timeout_seconds: int = STALE_CLAIM_TIMEOUT_SECONDS) -> 
 
 
 def mark_published(post_id: int, zernio_post_id: str) -> None:
+    """Mark a post as successfully published. Clears `claimed_at` so a stale
+    timestamp can't later confuse the stale-claim sweep into mis-flagging
+    a healthy published row.
+    """
     with _connect() as conn:
         conn.execute(
             """UPDATE posts
-               SET status='published', zernio_post_id=?, attempts=attempts+1, updated_at=?
+               SET status='published', zernio_post_id=?, attempts=attempts+1,
+                   claimed_at=NULL, updated_at=?
                WHERE id=?""",
             (zernio_post_id, _now(), post_id),
         )
 
 
 def record_failure(post_id: int, error: str, retry_at: str | None) -> None:
-    """
-    Increment attempts and record error.
-    retry_at set → status='pending' (will be retried).
-    retry_at None → status='failed' (permanently failed).
+    """Increment attempts and record error.
+
+    retry_at set → status='pending' (will be retried by the scheduler).
+    retry_at None → status='failed' (permanent; user must re-queue manually).
+
+    Either way, `claimed_at` is cleared. The dispatch attempt that set
+    `claimed_at` is over — leaving the timestamp would cause the stale-
+    claim recovery sweep to incorrectly mark legitimately-retrying posts
+    as stranded the moment they crossed the timeout threshold.
     """
     status = "pending" if retry_at else "failed"
     with _connect() as conn:
         conn.execute(
             """UPDATE posts
-               SET attempts=attempts+1, last_error=?, next_retry_at=?, status=?, updated_at=?
+               SET attempts=attempts+1, last_error=?, next_retry_at=?, status=?,
+                   claimed_at=NULL, updated_at=?
                WHERE id=?""",
             (error, retry_at, status, _now(), post_id),
         )
