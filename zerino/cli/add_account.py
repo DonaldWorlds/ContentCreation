@@ -43,7 +43,10 @@ def main() -> None:
     # add
     p_add = sub.add_parser("add", help="Register a new account")
     p_add.add_argument("--platform", required=True,
-                       choices=["tiktok", "youtube_shorts", "facebook_reels", "twitter"],
+                       choices=[
+                           "tiktok", "youtube_shorts", "facebook_reels", "twitter",
+                           "instagram_reels", "pinterest",
+                       ],
                        help="Platform name")
     p_add.add_argument("--handle", required=True, help="Account handle or display name")
     p_add.add_argument("--zernio-account-id", required=True,

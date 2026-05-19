@@ -28,7 +28,10 @@ from zerino.processors._captions import (
 from zerino.processors.base import Processor, ProcessorResult
 
 # Same platform list as VerticalProcessor — layout is per-account, not per-platform.
-SQUARE_PLATFORMS = ("tiktok", "youtube_shorts", "facebook_reels", "twitter")
+SQUARE_PLATFORMS = (
+    "tiktok", "youtube_shorts", "facebook_reels", "twitter",
+    "instagram_reels", "pinterest",
+)
 
 LAYOUT_NAME = "square"
 PLAY_RES_X = 1080

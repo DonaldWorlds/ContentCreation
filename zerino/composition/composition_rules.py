@@ -56,6 +56,22 @@ def get_platform_preset(platform: str, layout: str = "vertical") -> dict:
             "aspect_ratio": "9:16",
             "safe_area": {"top": 120, "bottom": 260},
         },
+        # Instagram Reels — Meta. Same canvas as TikTok / Shorts; safe area
+        # slightly tighter to match IG's UI overlay (story bar + reply chip).
+        "instagram_reels": {
+            "canvas_width": 1080,
+            "canvas_height": 1920,
+            "aspect_ratio": "9:16",
+            "safe_area": {"top": 140, "bottom": 280},
+        },
+        # Pinterest video pins — 9:16, more relaxed UI overlay so safe area
+        # matches TikTok's defaults rather than the tighter Meta ones.
+        "pinterest": {
+            "canvas_width": 1080,
+            "canvas_height": 1920,
+            "aspect_ratio": "9:16",
+            "safe_area": {"top": 120, "bottom": 260},
+        },
     }
 
     return presets.get(platform.lower(), presets["tiktok"])

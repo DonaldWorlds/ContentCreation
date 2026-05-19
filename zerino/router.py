@@ -1,9 +1,10 @@
 """Router: given a clip and a list of platforms, dispatch each to the right
 processor.
 
-System 1 ("volume" pipeline) supports the four short-form platforms
+System 1 ("volume" pipeline) supports the six short-form platforms
 
-    tiktok | youtube_shorts | facebook_reels | twitter
+    tiktok | youtube_shorts | facebook_reels | twitter |
+    instagram_reels | pinterest
 
 in three layouts:
 

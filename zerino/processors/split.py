@@ -34,7 +34,10 @@ from zerino.processors._captions import (
 )
 from zerino.processors.base import Processor, ProcessorResult
 
-SPLIT_PLATFORMS = ("tiktok", "youtube_shorts", "facebook_reels", "twitter")
+SPLIT_PLATFORMS = (
+    "tiktok", "youtube_shorts", "facebook_reels", "twitter",
+    "instagram_reels", "pinterest",
+)
 
 LAYOUT_NAME = "split"
 CANVAS_WIDTH = 1080

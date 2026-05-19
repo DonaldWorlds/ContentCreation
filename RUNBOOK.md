@@ -138,6 +138,8 @@ python -m zerino.cli.add_account add \
     --platform tiktok \
     --handle @yourhandle \
     --zernio-account-id <24-char-id>
+# Supported platforms: tiktok, youtube_shorts, facebook_reels, twitter,
+#                      instagram_reels, pinterest
 # Optional: --profile-id <zernio-profile-id>
 # Optional: --layout square     (square 1:1 instead of vertical 9:16)
 
