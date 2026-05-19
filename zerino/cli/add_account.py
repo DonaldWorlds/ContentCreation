@@ -65,6 +65,14 @@ def main() -> None:
         help="Update fields on an existing account (handle, zernio id, profile id, active)",
     )
     p_upd.add_argument("--id", type=int, required=True, help="Account DB id (the small int from `list`, not the 24-char Zernio id)")
+    p_upd.add_argument(
+        "--platform",
+        choices=[
+            "tiktok", "youtube_shorts", "facebook_reels", "twitter",
+            "instagram_reels", "pinterest",
+        ],
+        help="Move the row to a different platform (fix for a mis-typed `add`)",
+    )
     p_upd.add_argument("--handle", help="New handle")
     p_upd.add_argument("--zernio-account-id", help="New 24-char Zernio account id")
     p_upd.add_argument("--profile-id", help="New Zernio profile id")
@@ -119,6 +127,7 @@ def main() -> None:
         active = None if args.active is None else (args.active == "true")
         n = update_account(
             args.id,
+            platform=args.platform,
             handle=args.handle,
             zernio_account_id=args.zernio_account_id,
             profile_id=args.profile_id,

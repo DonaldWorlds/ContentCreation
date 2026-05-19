@@ -61,15 +61,24 @@ def deactivate_account(account_id: int) -> None:
 def update_account(
     account_id: int,
     *,
+    platform: str | None = None,
     handle: str | None = None,
     zernio_account_id: str | None = None,
     profile_id: str | None = None,
     active: bool | None = None,
     layout: str | None = None,
 ) -> int:
-    """Update mutable fields on an existing account row. Returns row count."""
+    """Update mutable fields on an existing account row. Returns row count.
+
+    `platform` is mutable so a mis-typed `add` doesn't require delete-and-
+    re-add (would lose the row id + any history). Allowed values are the
+    same set CLI accepts on `add`.
+    """
     sets: list[str] = []
     params: list[Any] = []
+    if platform is not None:
+        sets.append("platform=?")
+        params.append(platform.lower())
     if handle is not None:
         sets.append("handle=?")
         params.append(handle)
