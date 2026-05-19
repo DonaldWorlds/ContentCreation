@@ -121,7 +121,7 @@ def queue_clips_for_posting(
         # Console line — prominent, easy to read at a glance during a stream
         print(f"  Clip {index + 1}: {when_short}")
         print(f"          file: {clip_path.name}")
-        print(f"          text: {chosen_caption.splitlines()[0] if chosen_caption else '(no caption — pool is empty)'}")
+        print(f"          text: {chosen_caption.splitlines()[0] if chosen_caption else '(no caption - pool is empty)'}")
 
         # Structured log line — same info but for logs/zerino.log
         log.info(
@@ -240,7 +240,7 @@ def queue_clip_jobs_for_posting(
 
         print(f"  Clip {index + 1}: {when_short}")
         print(f"          src:  {job.source_path.name} [{job.start:.1f}s-{job.end:.1f}s]")
-        print(f"          text: {job.caption.splitlines()[0] if job.caption else '(no caption — pool is empty)'}")
+        print(f"          text: {job.caption.splitlines()[0] if job.caption else '(no caption - pool is empty)'}")
 
         log.info(
             "clip_to_posts: clip_id=%s (idx=%d) -> %s (mode=%s) platforms=%s",

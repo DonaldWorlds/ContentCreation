@@ -32,10 +32,15 @@ WATERMARK_BOTTOM_MARGIN = 80
 # Width of the watermark as a fraction of the output canvas width. 0.60 =
 # ~60 % wide on a 1080-wide canvas (~648 px). Sized to be clearly readable
 # even at TikTok / IG feed THUMBNAIL scale. Height auto-scales to preserve
-# the PNG's aspect ratio (the 678×63 source banner becomes ~648×60 here).
+# the PNG's aspect ratio (the 678x63 source banner becomes ~648x60 here).
 # Iteration history: 0.18 (too small, barely legible) -> 0.35 (readable at
 # full-screen but not at thumbnail) -> 0.60 (current, "very visible" target).
 WATERMARK_WIDTH_FRACTION = 0.60
+
+# Cached file-exists result. None = not checked yet. Probed once per process
+# in `_watermark_graph_pieces` so we don't hit the filesystem (and don't
+# spam the same WARN) on every render in a long capture session.
+_WATERMARK_FILE_PRESENT: bool | None = None
 
 # --- Audio policy (S6.1, S6.2, S6.3) ---------------------------------------- #
 # Static speech leveler. Single-pass `loudnorm` was the prior chain and is
@@ -351,14 +356,21 @@ def _watermark_graph_pieces(layout: str, canvas_width: int) -> tuple[str, str] |
 
     `overlay_position` is the `X:Y` expression for the `overlay` filter.
     """
+    global _WATERMARK_FILE_PRESENT
     if not WATERMARK_ENABLED:
         return None
-    if not WATERMARK_PATH.exists():
-        _log.warning(
-            "watermark missing at %s — render will skip the watermark. "
-            "Drop the PNG there (or set ZERINO_WATERMARK_ENABLED=0 to silence).",
-            WATERMARK_PATH,
-        )
+    # Cached existence check — we don't want to stat the disk + emit the
+    # same WARN once per render across a long capture session.
+    if _WATERMARK_FILE_PRESENT is None:
+        _WATERMARK_FILE_PRESENT = WATERMARK_PATH.exists()
+        if not _WATERMARK_FILE_PRESENT:
+            _log.warning(
+                "watermark missing at %s - every render this process will "
+                "skip the watermark. Drop the PNG there, or set "
+                "ZERINO_WATERMARK_ENABLED=0 to silence. This message logs once.",
+                WATERMARK_PATH,
+            )
+    if not _WATERMARK_FILE_PRESENT:
         return None
 
     path_escaped = _escape_ffmpeg_movie_path(WATERMARK_PATH)

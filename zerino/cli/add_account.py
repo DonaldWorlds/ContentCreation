@@ -147,12 +147,12 @@ def main() -> None:
         try:
             n = delete_account(args.id, force=args.force)
         except AccountHasPostsError as e:
-            print(f"Cannot remove account id={e.account_id} — {e.post_count} post(s) reference it.")
+            print(f"Cannot remove account id={e.account_id} - {e.post_count} post(s) reference it.")
             print("Choose one:")
             print(f"  python -m zerino.cli.add_account deactivate --id {e.account_id}")
             print(f"      (keeps the account + posts in the DB, just stops using it)")
             print(f"  python -m zerino.cli.add_account remove --id {e.account_id} --force")
-            print(f"      (deletes the account AND all {e.post_count} post(s) — destructive)")
+            print(f"      (deletes the account AND all {e.post_count} post(s) - destructive)")
             return
         if n:
             print(f"Account id={args.id} permanently deleted.")

@@ -105,7 +105,7 @@ def _delete_files(files: list[Path], dry_run: bool, label: str) -> tuple[int, in
         except OSError as e:
             print(f"  ERR could not delete {p}: {e}")
     verb = "Would free" if dry_run else "Freed"
-    print(f"{label}: {deleted} file(s) — {verb} {_bytes_human(total_bytes)}")
+    print(f"{label}: {deleted} file(s) - {verb} {_bytes_human(total_bytes)}")
     return deleted, total_bytes
 
 

@@ -213,7 +213,7 @@ def dispatch_post_ids(post_ids: list[int]) -> None:
             ).fetchone()
 
             if row is None:
-                log.warning("dispatch: post id=%d not found in DB after claim — skipping", pid)
+                log.warning("dispatch: post id=%d not found in DB after claim - skipping", pid)
                 continue
 
             row = dict(row)

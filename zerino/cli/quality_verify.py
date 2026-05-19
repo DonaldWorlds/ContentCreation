@@ -736,7 +736,7 @@ def verify(
             _extract_frame(input_path, sample_ts, caption_sample_path)
             log.info("caption sample frame: %s @ %.2fs", caption_sample_path.name, sample_ts)
     else:
-        log.info("no .ass sidecar at %s — skipping caption checks", ass_sidecar)
+        log.info("no .ass sidecar at %s - skipping caption checks", ass_sidecar)
 
     compare_dir: Path | None = None
     if reference_path is not None:
