@@ -29,10 +29,12 @@ WATERMARK_ENABLED = os.getenv("ZERINO_WATERMARK_ENABLED", "1") == "1"
 # Bottom safe-margin for vertical / square placements. 80 px on a 1920-tall
 # frame is ~4 % of canvas — clear of the platform UI bottom band.
 WATERMARK_BOTTOM_MARGIN = 80
-# Width of the watermark as a fraction of the output canvas width. 0.18 =
-# ~18 % wide on a 1080-wide canvas (~195 px). Big enough to read; small
-# enough not to dominate. Height auto-scales to preserve aspect ratio.
-WATERMARK_WIDTH_FRACTION = 0.18
+# Width of the watermark as a fraction of the output canvas width. 0.35 =
+# ~35 % wide on a 1080-wide canvas (~378 px). Sized to read clearly at
+# TikTok / IG feed thumbnail scale without dominating the frame. Height
+# auto-scales to preserve aspect ratio (the source PNG's intrinsic aspect
+# ratio is preserved — for the 678×63 banner that's 378×35 at this width).
+WATERMARK_WIDTH_FRACTION = 0.35
 
 # --- Audio policy (S6.1, S6.2, S6.3) ---------------------------------------- #
 # Static speech leveler. Single-pass `loudnorm` was the prior chain and is
@@ -506,18 +508,14 @@ class ExportGenerator:
         config = build_processing_config(metadata, platform=platform, style=style, layout=layout)
         vf = self.build_filter(metadata, config)
 
-        if subtitles_path is not None:
-            from zerino.processors._captions import subtitles_filter
-            # Burn captions BEFORE watermark. libass's original_size matches
-            # the .ass PlayResX/Y so captions render at the right size.
-            vf = (
-                f"{vf},"
-                f"{subtitles_filter(Path(subtitles_path), play_res_x=config['canvas_width'], play_res_y=config['canvas_height'])}"
-            )
+        # Layer order: watermark FIRST, captions LAST. The captions get
+        # z-order priority because they're the load-bearing content; the
+        # watermark is positioned to avoid the caption region anyway, but
+        # if a caption ever drifts into the watermark zone we want the
+        # word visible, not the logo.
 
-        # Watermark overlay (on top of everything, including burned captions).
-        # When enabled + file present, we wrap the simple comma-chain `vf`
-        # into a labeled filter graph that combines the main video with the
+        # Watermark overlay — wrap the simple comma-chain `vf` into a
+        # labeled filter graph that composites the main video with the
         # PNG loaded by the `movie=` source filter.
         wm_pieces = _watermark_graph_pieces(layout, config["canvas_width"])
         if wm_pieces is not None:
@@ -526,6 +524,16 @@ class ExportGenerator:
                 f"{movie_node};"
                 f"[0:v]{vf}[base];"
                 f"[base][wm]overlay={position}"
+            )
+
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            # Captions burned LAST (after watermark) so they sit on top.
+            # libass's original_size matches the .ass PlayResX/Y so
+            # captions render at the right pixel size.
+            vf = (
+                f"{vf},"
+                f"{subtitles_filter(Path(subtitles_path), play_res_x=config['canvas_width'], play_res_y=config['canvas_height'])}"
             )
 
         af = self.build_audio_filter(duration)
@@ -652,17 +660,11 @@ class ExportGenerator:
         ]
         current_label = "stacked"
 
-        if subtitles_path is not None:
-            from zerino.processors._captions import subtitles_filter
-            sub = subtitles_filter(
-                Path(subtitles_path),
-                play_res_x=canvas_width, play_res_y=canvas_height,
-            )
-            graph_parts.append(f"[{current_label}]{sub}[v_subs]")
-            current_label = "v_subs"
+        # Layer order: watermark FIRST, then subtitles on top. Captions win
+        # z-order so a stray caption never gets obscured by the logo.
 
-        # Watermark overlay on top of subs (split layout: middle of canvas,
-        # bottom edge at the seam between face and gameplay halves).
+        # Watermark overlay (split layout: middle of canvas, bottom edge at
+        # the seam between face and gameplay halves).
         wm_pieces = _watermark_graph_pieces("split", canvas_width)
         if wm_pieces is not None:
             movie_node, position = wm_pieces
@@ -671,6 +673,15 @@ class ExportGenerator:
                 f"[{current_label}][wm]overlay={position}[v_wm]"
             )
             current_label = "v_wm"
+
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            sub = subtitles_filter(
+                Path(subtitles_path),
+                play_res_x=canvas_width, play_res_y=canvas_height,
+            )
+            graph_parts.append(f"[{current_label}]{sub}[v_subs]")
+            current_label = "v_subs"
 
         video_map = f"[{current_label}]"
         filter_complex = ";".join(graph_parts)
@@ -725,9 +736,7 @@ class ExportGenerator:
         config = build_processing_config(metadata, platform=platform, style=style)
         vf = self.build_filter(metadata, config)
 
-        if subtitles_path is not None:
-            from zerino.processors._captions import subtitles_filter
-            vf = f"{vf},{subtitles_filter(Path(subtitles_path))}"
+        # Layer order: watermark FIRST, captions LAST so captions win z-order.
 
         # Watermark overlay (legacy path — treats every render as vertical
         # layout since this function doesn't take a layout arg).
@@ -739,6 +748,10 @@ class ExportGenerator:
                 f"[0:v]{vf}[base];"
                 f"[base][wm]overlay={position}"
             )
+
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            vf = f"{vf},{subtitles_filter(Path(subtitles_path))}"
 
         af = self.build_audio_filter(metadata.get("duration"))
 
