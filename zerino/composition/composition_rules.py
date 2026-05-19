@@ -172,6 +172,18 @@ def build_processing_config(metadata: dict, platform: str, style: str = "talking
             "safe_area": preset["safe_area"],
         }
 
+    # S6.18: pass `crop_mode` (the KEY ExportGenerator.build_filter reads)
+    # alongside the existing `crop_anchor` (kept for any older consumer).
+    # Talking-head templates set composition_type='golden_zone' to bias
+    # the crop window toward the rule-of-thirds anchor instead of dead
+    # center — pre-S6.18 this key wasn't wired through so every clip
+    # silently used a center crop regardless of the template.
+    crop_anchor_mode = (
+        "golden_zone"
+        if template.get("composition_type") == "golden_zone"
+        else "center"
+    )
+
     return {
         "input_width": width,
         "input_height": height,
@@ -182,9 +194,12 @@ def build_processing_config(metadata: dict, platform: str, style: str = "talking
         "template": template["template"],
         "layout": layout,
         "mode": crop_mode,
+        # S6.18: the key ExportGenerator.build_filter actually reads.
+        "crop_mode": crop_anchor_mode,
         "center_bias": template.get("center_bias", 0.5),
         "zoom_amount": 1.0,
-        "crop_anchor": "center",
+        # Legacy key — older consumers may reference `crop_anchor` directly.
+        "crop_anchor": crop_anchor_mode,
         "scaling_mode": "fit" if crop_mode == "pad" else "fill",
         "final_platform_output": template["platform"],
     }

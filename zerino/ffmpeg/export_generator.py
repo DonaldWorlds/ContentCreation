@@ -7,95 +7,131 @@ from zerino.composition.composition_rules import build_processing_config
 
 _log = logging.getLogger("zerino.ffmpeg.export_generator")
 
-# --- Quality tuning (Phase 2.5) ---------------------------------------------
-# Subtle color/contrast bump — makes flat stream captures pop without looking
-# filtered. Applied at the very start of the video filter chain.
-COLOR_FILTER = "eq=contrast=1.05:saturation=1.1:gamma=0.97"
+# --- Audio policy (S6.1, S6.2, S6.3) ---------------------------------------- #
+# Static speech leveler. Single-pass `loudnorm` was the prior chain and is
+# famously a *dynamic* envelope follower — its I/TP/LRA values are TARGETS
+# it chases, not values it achieves, so on real clips it pumped through
+# silences and squashed plosives. The static chain below is rate-agnostic
+# and deterministic:
+#   highpass=f=80     — kills sub-bass rumble (mic stand thumps, AC, room hum)
+#   dynaudnorm=f=200  — ~4 s window at 48 k. Long enough to read whole
+#                       phrases as a single "loudness unit" so it doesn't
+#                       breathe per-syllable.
+#                       g=15 frames smoothing; p=0.95 pushes the average
+#                       peak to 95 % of full scale. Empirically lands
+#                       integrated loudness near -14 LUFS on talking-head
+#                       speech (TikTok / IG target). Previous p=0.7 was
+#                       3 dB too quiet on real clips.
+#   alimiter=limit=0.95 — sample peak ceiling at -0.4 dB. Empirically
+#                         tested: 0.95 lands integrated near -14.6 LUFS
+#                         (close to TikTok's -14 target) with true peaks
+#                         around 0 dBTP. Tightening to 0.85 paradoxically
+#                         raised the integrated to -13.8 (dynaudnorm and
+#                         the limiter don't share state — tighter limit
+#                         meant dynaudnorm's peak target landed lower
+#                         which the encoder compensated for). 0.95 is the
+#                         empirical sweet spot. TikTok's own re-encoder
+#                         pass will catch any residual inter-sample peaks.
+SPEECH_LEVELER = "highpass=f=80,dynaudnorm=f=200:g=15:p=0.95,alimiter=limit=0.95"
 
-# TikTok / Instagram target loudness. Raw stream audio is typically ~-20 LUFS,
-# so without normalization clips sound quieter than the feed and get scrolled.
-LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
+# Fade in BEFORE the leveler so the leveler doesn't have to "warm up" on
+# a hard-cut audio edge — its envelope state at sample 0 is then the
+# steady-state of the fade-in's brief ramp instead of "I just hit a wall
+# of audio." 50 ms is plenty to kill the click without being audible.
+AUDIO_FADE_IN_SEC = 0.05
+AUDIO_FADE_OUT_SEC = 0.20
 
-AUDIO_FADE_IN_SEC = 0.15   # 150 ms — kills the hard-cut audio pop on entry
-AUDIO_FADE_OUT_SEC = 0.20  # 200 ms — gentle tail-out
-
-# --- Encode quality settings -------------------------------------------------
-# Bitrate-target VBR (replaces the prior CRF 20 mode that let x264 starve
-# gameplay/dark scenes down to ~4 Mbps and look muddy on 1080p60 short-form).
+# --- Encode quality settings (S6.16) ---------------------------------------- #
+# CRF / CQ mode replaces the prior ABR target. ABR=15M was averaging far
+# under target on real face-cam clips (probe of renders/tiktok showed
+# ~3.85 Mbps actual against a 15M target — x264 spent the saved bits never
+# because there were no subsequent high-motion shots to dump them into).
+# Quality-target mode lets the encoder use bits where the content needs
+# them and never overspend on easy frames. We still cap via -maxrate to
+# avoid handing TikTok a 25 Mbps file it would just re-encode anyway.
 #
-# Targets pick: TikTok recommends 8-12 Mbps for 1080p60 and re-encodes
-# anything above ~15 Mbps, so 15M is the sweet spot — max quality without
-# wasted upload bandwidth. YouTube Shorts wants >=8 Mbps. maxrate 18M gives
-# 20% headroom for high-motion bursts; bufsize 30M ~= 2x maxrate per Apple
-# guidance for stable rate control.
-TARGET_BITRATE = "15M"
-MAX_BITRATE = "18M"
-BUFFER_SIZE = "30M"
+# Caps pick: TikTok re-encodes above ~10-12 Mbps. 12M maxrate is the
+# headroom upper bound; the actual average lands around 6-9 Mbps on
+# typical talking-head content. bufsize 2x maxrate per ffmpeg guidance.
+LIBX264_CRF = "18"          # "visually lossless" — common professional default
+NVENC_CQ = "20"             # ~equivalent to libx264 CRF 18
+MAX_BITRATE = "12M"
+BUFFER_SIZE = "24M"
+
+# Split layouts get slightly higher maxrate because the face half does
+# a 1.78x upscale and benefits from the extra headroom. CRF/CQ themselves
+# stay the same — quality target is per-content, not per-layout.
+SPLIT_MAX_BITRATE = "14M"
+SPLIT_BUFFER_SIZE = "28M"
 
 # preset=slow gives better compression efficiency than medium at the same
-# bitrate (smaller artifacts for the same data budget). 30s short-form
-# clips re-encode in seconds; the speed cost is invisible.
+# CRF (smaller artifacts for the same quality). 60s short-form clips
+# re-encode in seconds on Apple Silicon; the speed cost is invisible.
 ENCODE_PRESET = "slow"
 
-# Force broadly-compatible 4:2:0 8-bit — required by some Zernio backends
-# and most short-form platforms; explicit so a future encoder change can't
-# silently switch to 4:2:2/10-bit and break upload.
+# Force broadly-compatible 4:2:0 8-bit — required by most short-form
+# platforms; explicit so a future encoder change can't silently switch
+# to 4:2:2 / 10-bit and break upload.
 PIX_FMT = "yuv420p"
 
-# AAC at 256k is well under most platform limits and is the practical max
-# before perceptual gains plateau. Bumped from 192k.
+# AAC bitrate target for native AAC fallback (Windows / Linux). Mac's
+# aac_at uses VBR via -q:a instead.
 AUDIO_BITRATE = "256k"
 
-# Light denoise BEFORE the face upscale — webcam sensor noise is high-
-# entropy and tricks x264's adaptive quantization into spending bits on
-# random grain instead of face features. hqdn3d cleans the noise cheaply
-# (it's the fastest ffmpeg denoiser; nlmeans/atadenoise are higher quality
-# but 10-50x slower). Tuning: luma_spatial=1.5 chroma_spatial=1.5
-# luma_temporal=6 chroma_temporal=6 = gentle, won't oversmooth skin texture.
-SPLIT_FACE_DENOISE = "hqdn3d=1.5:1.5:6:6"
+# --- Color metadata tags (S6.8) --------------------------------------------- #
+# Write explicit BT.709 tags so Android / web / Roku players don't guess
+# BT.601 and tint playback. Zero perf cost; metadata-only.
+COLOR_TAG_ARGS = [
+    "-color_primaries", "bt709",
+    "-color_trc", "bt709",
+    "-colorspace", "bt709",
+    "-color_range", "tv",
+]
 
-# Sharpening pass for the split layout's face half, AFTER the denoise+scale
-# chain so we sharpen real detail instead of amplified noise. luma_amount
-# dropped 0.8 -> 0.5 because the upstream denoise removes the noise floor
-# that the earlier 0.8 was compensating for; 0.5 produces less ringing on
-# skin / hair edges.
-SPLIT_FACE_UNSHARP = "unsharp=5:5:0.5:5:5:0.0"
+# --- Split-layout filter constants (S6.5) ----------------------------------- #
+# Softened denoise. Was 1.5/1.5/6/6, which over-smoothed skin across frames
+# (Snapchat-skin look). 1.0/1.0/3/3 keeps webcam grain texture and only
+# cleans the high-entropy random noise that wastes x264's bit budget.
+SPLIT_FACE_DENOISE = "hqdn3d=1.0:1.0:3:3"
 
-# Split renders override the auto-detected hardware encoder and use libx264
-# with film-tuned adaptive quantization. The face upscale + skin tones +
-# the hard split-stack architecture all benefit from libx264's superior
-# per-bit efficiency over VideoToolbox/NVENC at the same bitrate. We trade
-# ~5x encode speed for materially cleaner skin/eyes. -tune film treats
-# webcam grain as film grain (don't waste bits flattening it); aq-mode=3
-# + aq-strength=1.0 distributes bits more uniformly across the frame so
-# the face half doesn't get starved by the gameplay half's complexity.
+# (SPLIT_FACE_UNSHARP removed — was sharpening the lanczos upscale's edge
+# ringing into visible halos. Bicubic upscale (S6.15) doesn't ring; no
+# sharpener needed.)
+
+# Split renders force libx264 — NVENC is competitive on most content but
+# libx264 -preset slow is materially cleaner on the face quadrant's
+# upscaled skin tones. Worth ~5x encode time vs NVENC for the quality.
+# -tune film was removed (S6.5): it told x264 to preserve grain, but
+# hqdn3d had just removed that grain — the two were fighting.
 SPLIT_VIDEO_ENCODER = "libx264"
 SPLIT_VIDEO_ENCODER_ARGS = [
     "-preset", "slow",
-    "-tune", "film",          # psy-rd defaults are already tuned for film grain
     "-profile:v", "high",
     "-level", "4.2",
+    "-crf", LIBX264_CRF,
     # aq-mode 3 (auto-variance) + strength 1.0 distributes bits more evenly
-    # across the face/game halves. Colon is the x264-params separator; the
-    # values themselves must not contain colons.
+    # across the face/game halves.
     "-x264-params", "aq-mode=3:aq-strength=1.0",
 ]
 
-# Split layouts get more bitrate headroom than the standard 15M target,
-# because the face half is doing a brutal upscale and the encoder needs
-# room to preserve skin/eyes without starving gameplay. 20M peak is still
-# below TikTok's ~25M re-encode threshold.
-SPLIT_TARGET_BITRATE = "20M"
-SPLIT_MAX_BITRATE = "25M"
-SPLIT_BUFFER_SIZE = "40M"
 
-
-# --- Hardware encoder detection ---------------------------------------------
-# Probe ffmpeg's built-in encoder list at import time and cache the result.
-# Order of preference: NVENC (NVIDIA, fastest by far) > VideoToolbox (Mac
-# GPU, fast + clean) > libx264 (CPU fallback, slowest but most consistent).
-# At 15 Mbps target bitrate the quality delta between any of these is
-# imperceptible on 1080p short-form; the throughput delta is 5-20x.
+# --- Encoder detection (S6.3, S6.6) ----------------------------------------- #
+# Probe ffmpeg's built-in encoder lists at import time and cache.
+# Video encoder priority (after S6.6):
+#   1. h264_nvenc (Windows / Linux w/ NVIDIA GPU) — genuinely faster than
+#      libx264 -slow at comparable quality.
+#   2. libx264 (always) — CPU fallback. On Apple Silicon this runs at
+#      4-6x realtime for 60s 1080p clips; the speed-vs-quality trade for
+#      VideoToolbox doesn't hold up (VideoToolbox at 12M maxrate produced
+#      visible banding on dark gradients + smearing on skin, per testing).
+# VideoToolbox is intentionally NOT in the priority chain — kept off entirely.
+#
+# Audio encoder priority (S6.3):
+#   1. aac_at (macOS only — Apple AudioToolbox) — materially cleaner on
+#      plosives and sibilants than ffmpeg's native AAC at the same bitrate.
+#   2. aac (always) — native ffmpeg encoder. On Windows / Linux we add
+#      `-aac_coder twoloop` which is slower but better than the default
+#      `fast` coder.
 
 def _probe_available_encoders() -> set[str]:
     try:
@@ -105,68 +141,179 @@ def _probe_available_encoders() -> set[str]:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return set()
-    # Each encoder line looks like " V..... libx264 ..." — we only need the name.
     found: set[str] = set()
     for line in (out.stdout or "").splitlines():
         parts = line.strip().split()
-        if len(parts) >= 2 and parts[0].startswith("V"):
+        if len(parts) < 2:
+            continue
+        # Encoder lines start with a 6-char flag column; first char is the
+        # type (V=video, A=audio, S=subtitle). We collect both V and A.
+        flag = parts[0]
+        if flag.startswith("V") or flag.startswith("A"):
             found.add(parts[1])
     return found
 
 
+_AVAILABLE_ENCODERS = _probe_available_encoders()
+
+
 def _pick_video_encoder() -> tuple[str, list[str]]:
-    """Return (encoder_name, extra_args) for the fastest h264 encoder available.
-
-    extra_args are encoder-specific flags appended AFTER the universal
-    bitrate flags (-b:v / -maxrate / -bufsize) — used to pin preset/quality
-    knobs that don't translate across encoders.
+    """Return (encoder_name, args). NVENC first (Windows / Linux NVIDIA),
+    libx264 otherwise. VideoToolbox intentionally skipped — see S6.6.
     """
-    available = _probe_available_encoders()
-
-    if "h264_nvenc" in available:
-        # NVENC: preset p5 (slow-ish) gives near-x264-slow quality with a
-        # massive speed win. rc=vbr_hq + multipass=fullres lock in quality.
+    if "h264_nvenc" in _AVAILABLE_ENCODERS:
+        # NVENC CQ mode: -rc vbr enables variable bitrate WITH a quality
+        # target (-cq), then -maxrate / -bufsize cap the upper bound.
+        # multipass=fullres gives an extra ~1 dB of quality at minor speed
+        # cost; spatial-aq distributes bits within frames for skin/eyes.
         return ("h264_nvenc", [
             "-preset", "p5",
             "-tune", "hq",
             "-rc", "vbr",
+            "-cq", NVENC_CQ,
             "-multipass", "fullres",
             "-spatial-aq", "1",
         ])
-
-    if "h264_videotoolbox" in available:
-        # VideoToolbox: -q:v 60 (range 0-100) maps to ~CRF 20-ish but we're
-        # in bitrate mode anyway; -allow_sw 1 lets it fall back to software
-        # if the GPU is busy. No preset concept — speed is fixed.
-        return ("h264_videotoolbox", [
-            "-allow_sw", "1",
-            "-realtime", "0",  # 0 = quality > speed (default on Apple Silicon)
-        ])
-
-    # CPU fallback — libx264 is always present in any reasonable ffmpeg build.
+    # CPU fallback — libx264 ships with every reasonable ffmpeg build.
     return ("libx264", [
         "-preset", ENCODE_PRESET,
+        "-crf", LIBX264_CRF,
+    ])
+
+
+def _pick_audio_encoder() -> tuple[str, list[str]]:
+    """Return (encoder_name, args). aac_at on Mac, native AAC + twoloop
+    elsewhere. The twoloop coder is ~3x slower than default `fast` but
+    gives noticeably cleaner output at the same bitrate — short-form
+    clips re-encode quickly enough that the cost is invisible.
+    """
+    if "aac_at" in _AVAILABLE_ENCODERS:
+        # aac_at in bitrate-target mode lands at a predictable rate. The
+        # initial attempt at VBR `-q:a 9` produced ~73 kbps on real talking-
+        # head speech (aac_at was conservative on low-entropy content) — way
+        # under the comfortable speech band of 160-256 kbps. Bitrate mode
+        # at 192k is enough headroom for clean speech + game audio.
+        return ("aac_at", ["-b:a", "192k"])
+    return ("aac", [
+        "-b:a", AUDIO_BITRATE,
+        "-aac_coder", "twoloop",
     ])
 
 
 VIDEO_ENCODER, VIDEO_ENCODER_ARGS = _pick_video_encoder()
+AUDIO_ENCODER, AUDIO_ENCODER_ARGS = _pick_audio_encoder()
 _log.info("video encoder selected: %s", VIDEO_ENCODER)
+_log.info("audio encoder selected: %s", AUDIO_ENCODER)
+
+
+# --- Source normalization (S0.2) --------------------------------------------
+# The creative chain (eq, crop, scale, leveler) assumes 8-bit BT.709 yuv420p
+# input. Sources we accept can deviate:
+#   - OBS HEVC recordings can land 10-bit (`yuv420p10le`); without an explicit
+#     downconvert the encoder quantizes to 8-bit somewhere in the middle of
+#     the chain with no dither, banding the gradient frames.
+#   - Some capture cards default to BT.601; eq's contrast curve then operates
+#     on the wrong gamma and the final output (which we tag BT.709 in S6.8)
+#     reads as slightly green-shifted on the viewer's device.
+#
+# `_video_normalize_prefix` returns an empty string or a comma-terminated
+# chunk to be prepended at the START of the filter chain (before any
+# creative filter). Audio sample-rate normalization is NOT a filter-graph
+# concern — `loudnorm` resets the rate to its input, so any `aresample`
+# upstream is silently undone. The audio output rate is set at the ffmpeg
+# command level via `-ar AUDIO_SAMPLE_RATE` instead, which sits outside the
+# filter graph and is honored unconditionally.
+
+
+def _video_normalize_prefix(metadata: dict) -> str:
+    """Return the conditional `format=yuv420p,colorspace=...,` prefix for the
+    video chain. Empty string when source is already 8-bit BT.709 yuv420p (the
+    common case). Only conditions on tags we are SURE about — None / unknown
+    falls through untouched because tag-less modern OBS recordings are almost
+    always BT.709, and "convert just in case" would alter correct sources.
+    """
+    parts: list[str] = []
+    pix_fmt = metadata.get("pix_fmt")
+    if pix_fmt and pix_fmt != "yuv420p":
+        parts.append("format=yuv420p")
+    primaries = metadata.get("color_primaries")
+    space = metadata.get("color_space")
+    if (primaries and primaries != "bt709") or (space and space != "bt709"):
+        parts.append(
+            "colorspace=all=bt709:iall=bt601:ispace=bt601:itrc=bt601:iprimaries=bt601"
+        )
+    if not parts:
+        return ""
+    return ",".join(parts) + ","
+
+
+# Output audio rate. Set unconditionally via `-ar` on every ffmpeg command —
+# resampling is a no-op when the source is already 48 kHz and a one-pass
+# conversion otherwise. TikTok / IG / Shorts all normalize to 48 kHz on
+# upload anyway; matching here saves the platform-side encoder a step.
+AUDIO_SAMPLE_RATE = "48000"
+
+
+def _pick_scaler(src_w: int, src_h: int, dst_w: int, dst_h: int) -> str:
+    """S6.15: pick scaler kernel based on direction.
+
+    Lanczos is excellent for DOWNSCALE (preserves detail) but introduces
+    ringing halos on edges during UPSCALE — those rings get amplified by
+    any downstream contrast / sharpen pass and read as "over-processed."
+    Bicubic at the same speed is softer on upscale, no ringing.
+
+    Decision is by total pixel area (handles aspect ratio changes correctly).
+    """
+    return "bicubic" if (dst_w * dst_h) > (src_w * src_h) else "lanczos"
+
+
+def _target_fps(metadata: dict) -> float:
+    """S6.7: match source fps instead of forcing 60. Forcing 60 on a 30 fps
+    source duplicates every frame, halving the effective bit budget on
+    actual motion. Cap at 60 to avoid emitting 120 fps from oddball sources.
+    """
+    src_fps = float(metadata.get("fps") or 30.0)
+    return min(60.0, src_fps)
+
+
+def _fps_filter(metadata: dict, target_fps: float) -> str:
+    """Return either `,fps=NN` or empty string. We only emit the fps filter
+    when the source actually differs from the target (avoids a no-op pass).
+    """
+    src_fps = float(metadata.get("fps") or 30.0)
+    if abs(src_fps - target_fps) <= 0.1:
+        return ""
+    return f",fps={target_fps:g}"
 
 
 class ExportGenerator:
 
     def build_filter(self, metadata, config):
+        """Build the -vf chain for the standard (non-split) renders.
+
+        Chain order: [source normalize] -> [crop / scale / setsar / fps].
+        S6.4: the eq=contrast/saturation/gamma filter was removed. The lift
+        was being applied on top of an already-saturated webcam source and
+        produced orange skin + crushed shadows. Source-preservation-first.
+        S6.7: fps target derived from source (no more forced 60).
+        S6.15: scaler chosen per direction (bicubic on upscale, lanczos
+        on downscale). S6.18: golden_zone crop anchor now actually wires
+        through composition_rules.
+        """
         target_width = config["canvas_width"]
         target_height = config["canvas_height"]
         mode = config["mode"]
-        fps = config.get("fps", 60)
-        scaler = config.get("scaler", "lanczos")
 
         input_width = metadata["width"]
         input_height = metadata["height"]
 
+        normalize = _video_normalize_prefix(metadata)
+        target_fps = _target_fps(metadata)
+        fps_clause = _fps_filter(metadata, target_fps)
+
         if mode == "crop":
             crop_mode = config.get("crop_mode", "center")
+            center_bias = float(config.get("center_bias", 0.5))
             target_ratio = target_width / target_height
             source_ratio = input_width / input_height
 
@@ -178,40 +325,57 @@ class ExportGenerator:
                 crop_h = int(input_width / target_ratio)
 
             if crop_mode == "golden_zone":
-                x = max(0, int((input_width - crop_w) * 0.42))
-                y = max(0, int((input_height - crop_h) * 0.42))
+                # S6.18: the rule-of-thirds-ish bias (typically 0.42)
+                # pulls the crop window toward the top-left of the source
+                # frame. On a centered-face webcam shot this lands the
+                # face higher in the output canvas — closer to the rule
+                # of thirds anchor than a dead-center crop. Was dead code
+                # before S6.18 because composition_rules wrote `mode`/
+                # `crop_anchor` keys instead of `crop_mode`.
+                x = max(0, int((input_width - crop_w) * center_bias))
+                y = max(0, int((input_height - crop_h) * center_bias))
             else:
                 x = max(0, (input_width - crop_w) // 2)
                 y = max(0, (input_height - crop_h) // 2)
 
+            scaler = _pick_scaler(crop_w, crop_h, target_width, target_height)
             return (
-                f"{COLOR_FILTER},"
+                f"{normalize}"
                 f"crop={crop_w}:{crop_h}:{x}:{y},"
                 f"scale={target_width}:{target_height}:flags={scaler},"
-                f"setsar=1,fps={fps}"
+                f"setsar=1{fps_clause}"
             )
 
         if mode == "pad":
+            scaler = _pick_scaler(input_width, input_height, target_width, target_height)
             return (
-                f"{COLOR_FILTER},"
+                f"{normalize}"
                 f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease:flags={scaler},"
                 f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black,"
-                f"setsar=1,fps={fps}"
+                f"setsar=1{fps_clause}"
             )
 
+        scaler = _pick_scaler(input_width, input_height, target_width, target_height)
         return (
-            f"{COLOR_FILTER},"
+            f"{normalize}"
             f"scale={target_width}:{target_height}:flags={scaler},"
-            f"setsar=1,fps={fps}"
+            f"setsar=1{fps_clause}"
         )
 
     def build_audio_filter(self, duration: float | None) -> str:
-        """Audio chain: loudness normalize to TikTok/IG target, then fade
-        in 150 ms and fade out 200 ms before EOF.
+        """Audio chain (S6.1 / S6.2):
+            afade=t=in (BEFORE leveler — see S6.2 comment in SPEECH_LEVELER)
+                -> highpass -> dynaudnorm -> alimiter
+                -> afade=t=out
+
+        Sample-rate normalization is NOT a concern of this chain — any
+        `aresample` in the filter graph gets reset by downstream filters
+        anyway. The output rate is fixed by `-ar AUDIO_SAMPLE_RATE` at
+        the ffmpeg command level.
         """
         parts = [
-            LOUDNORM_FILTER,
             f"afade=t=in:st=0:d={AUDIO_FADE_IN_SEC}",
+            SPEECH_LEVELER,
         ]
         if duration is not None and duration > AUDIO_FADE_OUT_SEC + 0.1:
             fade_out_st = max(0.0, duration - AUDIO_FADE_OUT_SEC)
@@ -253,8 +417,9 @@ class ExportGenerator:
         duration = end - start
         pre_roll = min(2.0, start)
 
-        # Probe the source for w/h/fps. Override duration with the slice's
-        # duration so audio fade-out timing is correct for the OUTPUT clip.
+        # Probe the source for w/h/fps + color/audio metadata (S0.1). Override
+        # `duration` with the slice duration so audio fade-out timing matches
+        # the OUTPUT clip, not the whole source.
         metadata = probe_metadata(source_path)
         metadata["duration"] = duration
 
@@ -263,9 +428,8 @@ class ExportGenerator:
 
         if subtitles_path is not None:
             from zerino.processors._captions import subtitles_filter
-            # Burn captions LAST so they aren't tinted by the eq color bump.
-            # Pass the canvas size so libass's original_size matches the .ass
-            # file's PlayResX/PlayResY (otherwise captions render the wrong size).
+            # Burn captions LAST. Pass canvas size so libass's original_size
+            # matches the .ass PlayResX/Y (otherwise captions render at wrong size).
             vf = (
                 f"{vf},"
                 f"{subtitles_filter(Path(subtitles_path), play_res_x=config['canvas_width'], play_res_y=config['canvas_height'])}"
@@ -275,21 +439,30 @@ class ExportGenerator:
 
         command = [
             "ffmpeg",
-            "-y",
+            "-y", "-nostdin",
             "-ss", f"{start - pre_roll:.3f}",
             "-i", str(source_path),
             "-ss", f"{pre_roll:.3f}",
             "-t", f"{duration:.3f}",
             "-vf", vf,
             "-af", af,
+            # S6.6/S6.16 video encoder + rate control. CRF / CQ in
+            # VIDEO_ENCODER_ARGS; we cap via -maxrate / -bufsize here.
             "-c:v", VIDEO_ENCODER,
             *VIDEO_ENCODER_ARGS,
-            "-b:v", TARGET_BITRATE,
             "-maxrate", MAX_BITRATE,
             "-bufsize", BUFFER_SIZE,
             "-pix_fmt", PIX_FMT,
-            "-c:a", "aac",
-            "-b:a", AUDIO_BITRATE,
+            # S6.8 color metadata — explicit BT.709 tags so non-Apple
+            # players don't guess BT.601 and tint playback green.
+            *COLOR_TAG_ARGS,
+            # S6.3 audio encoder + args (aac_at on Mac, native aac+twoloop
+            # elsewhere). Output sample rate is locked to 48 kHz outside
+            # the filter graph because filters like loudnorm reset to the
+            # input rate.
+            "-c:a", AUDIO_ENCODER,
+            *AUDIO_ENCODER_ARGS,
+            "-ar", AUDIO_SAMPLE_RATE,
             "-movflags", "+faststart",
             str(output_path),
         ]
@@ -341,32 +514,41 @@ class ExportGenerator:
         fx, fy, fw, fh = face_box
         gx, gy, gw, gh = game_box
 
-        scaler = "lanczos"
-        fps = 60
+        # Probe source: S0.2 normalize prefix + S6.7 source-fps match.
+        metadata = probe_metadata(source_path)
+        normalize = _video_normalize_prefix(metadata)
+        target_fps = _target_fps(metadata)
+        fps_clause = _fps_filter(metadata, target_fps)
 
-        # Face chain (forensic-tuned filter order):
-        #   crop → DENOISE before upscale (so we don't amplify noise) →
-        #   scale (lanczos, aspect-fit) → final crop → EQ AT OUTPUT RES
-        #   (banding from contrast/gamma bump doesn't get magnified by the
-        #   3.5x upscale anymore) → unsharp (mild, 0.5) → setsar/fps.
-        #
-        # Game chain (no denoise — it's a downscale, denoise would oversmooth
-        # textures): same order, eq moved to AFTER scale for consistency.
+        # S6.15: scaler by direction, per-half. Face is typically an upscale
+        # (small webcam quadrant -> 1080xhalf_h), so bicubic. Game is
+        # typically a downscale (large game region -> 1080xhalf_h), so
+        # lanczos. Computed from actual box dimensions so it adapts to
+        # whatever FACE_BOX / GAME_BOX the operator configures.
+        face_scaler = _pick_scaler(fw, fh, canvas_width, half_h)
+        game_scaler = _pick_scaler(gw, gh, canvas_width, half_h)
+
+        # Face chain (S6.4 eq removed, S6.5 unsharp removed, softened
+        # hqdn3d):
+        #   [normalize] -> crop -> hqdn3d (softened) -> bicubic upscale
+        #   -> final crop -> setsar (+ optional fps).
+        # The prior chain stacked eq + unsharp on top of the lanczos
+        # upscale, which produced "plastic skin" + edge halos. Bicubic
+        # upscale produces no ringing in the first place, so neither
+        # post-scale filter is needed.
         face_chain = (
-            f"crop={fw}:{fh}:{fx}:{fy},"
+            f"{normalize}crop={fw}:{fh}:{fx}:{fy},"
             f"{SPLIT_FACE_DENOISE},"
-            f"scale={canvas_width}:{half_h}:flags={scaler}:force_original_aspect_ratio=increase,"
+            f"scale={canvas_width}:{half_h}:flags={face_scaler}:force_original_aspect_ratio=increase,"
             f"crop={canvas_width}:{half_h},"
-            f"{COLOR_FILTER},"
-            f"{SPLIT_FACE_UNSHARP},"
-            f"setsar=1,fps={fps}"
+            f"setsar=1{fps_clause}"
         )
+        # Game chain (downscale): no denoise (would smear textures), no eq.
         game_chain = (
-            f"crop={gw}:{gh}:{gx}:{gy},"
-            f"scale={canvas_width}:{half_h}:flags={scaler}:force_original_aspect_ratio=increase,"
+            f"{normalize}crop={gw}:{gh}:{gx}:{gy},"
+            f"scale={canvas_width}:{half_h}:flags={game_scaler}:force_original_aspect_ratio=increase,"
             f"crop={canvas_width}:{half_h},"
-            f"{COLOR_FILTER},"
-            f"setsar=1,fps={fps}"
+            f"setsar=1{fps_clause}"
         )
 
         graph_parts = [
@@ -392,7 +574,7 @@ class ExportGenerator:
 
         command = [
             "ffmpeg",
-            "-y",
+            "-y", "-nostdin",
             "-ss", f"{start - pre_roll:.3f}",
             "-i", str(source_path),
             "-ss", f"{pre_roll:.3f}",
@@ -401,19 +583,21 @@ class ExportGenerator:
             "-map", video_map,
             "-map", "0:a",
             "-af", af,
-            # SPLIT-SPECIFIC ENCODER: libx264 + tune film + AQ tuning gives
-            # materially better skin-tone preservation than VideoToolbox /
-            # NVENC at the same bitrate. We force it here (overriding the
-            # auto-detected HW encoder) because face upscale + skin = where
-            # encoder efficiency matters most.
+            # SPLIT forces libx264 with the AQ tuning — face quadrant
+            # upscale + skin tones are where encoder efficiency matters
+            # most. NVENC is competitive on most content but libx264
+            # -slow is materially cleaner here. -tune film was removed
+            # (S6.5) because it told x264 to preserve grain that hqdn3d
+            # had just removed. CRF lives in SPLIT_VIDEO_ENCODER_ARGS.
             "-c:v", SPLIT_VIDEO_ENCODER,
             *SPLIT_VIDEO_ENCODER_ARGS,
-            "-b:v", SPLIT_TARGET_BITRATE,
             "-maxrate", SPLIT_MAX_BITRATE,
             "-bufsize", SPLIT_BUFFER_SIZE,
             "-pix_fmt", PIX_FMT,
-            "-c:a", "aac",
-            "-b:a", AUDIO_BITRATE,
+            *COLOR_TAG_ARGS,
+            "-c:a", AUDIO_ENCODER,
+            *AUDIO_ENCODER_ARGS,
+            "-ar", AUDIO_SAMPLE_RATE,
             "-movflags", "+faststart",
             str(output_path),
         ]
@@ -446,18 +630,19 @@ class ExportGenerator:
 
         command = [
             "ffmpeg",
-            "-y",
+            "-y", "-nostdin",
             "-i", str(input_path),
             "-vf", vf,
             "-af", af,
             "-c:v", VIDEO_ENCODER,
             *VIDEO_ENCODER_ARGS,
-            "-b:v", TARGET_BITRATE,
             "-maxrate", MAX_BITRATE,
             "-bufsize", BUFFER_SIZE,
             "-pix_fmt", PIX_FMT,
-            "-c:a", "aac",
-            "-b:a", AUDIO_BITRATE,
+            *COLOR_TAG_ARGS,
+            "-c:a", AUDIO_ENCODER,
+            *AUDIO_ENCODER_ARGS,
+            "-ar", AUDIO_SAMPLE_RATE,
             "-movflags", "+faststart",
             str(output_path)
         ]
