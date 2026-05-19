@@ -80,6 +80,71 @@ If you want to eliminate the first-clip latency entirely, hit one F8 marker earl
    - **F9** = gameplay moment → renders as 9:16 split (face on top + game on bottom).
    - Hotkey heartbeat logs `marker hotkey pressed (kind=…, press#=N)`. If `press#` stops increasing while you're pressing keys, macOS Accessibility permission was probably revoked — re-grant in System Settings.
 4. **Stop OBS recording.**
+
+### **CRITICAL — OBS scene layout for F9 (split) clips to work**
+
+The split processor crops your OBS recording into fixed quadrants. **If your webcam isn't in the right spot at the right size, the split clip will show the wrong region as your face.** F8 (square) doesn't care — it crops the whole frame. F9 cares a lot.
+
+**OBS canvas: 1920×1080** (Settings → Video → Base + Output Resolution).
+
+**Webcam — bottom-left quadrant, exactly half-width × half-height:**
+
+| OBS Transform field | Value |
+|---|---|
+| Position X | `0` |
+| Position Y | `540` |
+| Bounding Box Size | `960 × 540` |
+| Bounding Box Type | "Scale to inner bounds" |
+| Alignment | top-left |
+
+**Game capture — right half of canvas, full height:**
+
+| OBS Transform field | Value |
+|---|---|
+| Position X | `960` |
+| Position Y | `0` |
+| Bounding Box Size | `960 × 1080` |
+
+**Layer order in OBS Sources panel** (top of the list = front):
+1. Webcam (on top)
+2. Game Capture (behind)
+
+**Visual layout of your OBS canvas (1920 × 1080):**
+
+```
+┌─────────────────────┬─────────────────────┐
+│                     │                     │
+│  ░░░░░░░░░░░░░░░░░  │                     │
+│  ░ (anything you ░  │                     │
+│  ░  want here —   ░ │     GAME CAPTURE    │
+│  ░ alerts, top    ░ │      960 × 1080     │
+│  ░ banner, etc.)  ░ │      (x=960)        │
+│  ░░░░░░░░░░░░░░░░░  │     this fills      │
+│                     │     the entire      │
+├─────────────────────┤     right half      │
+│                     │                     │
+│      WEBCAM         │                     │
+│     960 × 540       │                     │
+│   (x=0, y=540)      │                     │
+│                     │                     │
+│   YOUR FACE FILLS   │                     │
+│   THIS BOX          │                     │
+└─────────────────────┴─────────────────────┘
+   bottom-left quadrant    right half full-height
+```
+
+**Verify your scene is correct before relying on F9:**
+- Look at your OBS preview. Webcam should be in the bottom-left, taking up exactly one quarter of the canvas.
+- Game capture should fill the right half — visible behind/around the webcam.
+- The top-left quadrant can be anything (alerts, stream label, blank — it gets cropped out of the F9 render).
+
+**What happens when F9 fires:**
+The processor crops two regions out of your 1920×1080 frame:
+- **Face region** (`FACE_BOX = (0, 540, 960, 540)`) → upscaled to fill the top half of the 1080×1920 vertical output.
+- **Gameplay region** (`GAME_BOX = (960, 0, 960, 1080)`) → downscaled to fill the bottom half.
+- Stacked vertically, captions burned just below the seam, watermark sits at the seam.
+
+If your webcam is too small, off-center, or in the wrong quadrant, the face region will show empty space / part of your scene / a partial face. The crop boxes are constants in [`zerino/processors/split.py`](zerino/processors/split.py) — if your OBS scene layout will never match these defaults, change `FACE_BOX` and `GAME_BOX` to match what you've got.
 5. The capture daemon detects the file is stable (10 seconds of unchanged file size — see `STABILITY_POLL_COUNT` in `recording_service.py`) → finishes recording → triggers the clip worker → renders every marker into a clip → queues posts.
 6. **Posting cadence:**
    - Clip #1 → immediate (Zernio publishes on its next pass, ≤ 5 s).
