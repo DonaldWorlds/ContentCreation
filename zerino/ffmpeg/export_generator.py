@@ -29,12 +29,13 @@ WATERMARK_ENABLED = os.getenv("ZERINO_WATERMARK_ENABLED", "1") == "1"
 # Bottom safe-margin for vertical / square placements. 80 px on a 1920-tall
 # frame is ~4 % of canvas — clear of the platform UI bottom band.
 WATERMARK_BOTTOM_MARGIN = 80
-# Width of the watermark as a fraction of the output canvas width. 0.35 =
-# ~35 % wide on a 1080-wide canvas (~378 px). Sized to read clearly at
-# TikTok / IG feed thumbnail scale without dominating the frame. Height
-# auto-scales to preserve aspect ratio (the source PNG's intrinsic aspect
-# ratio is preserved — for the 678×63 banner that's 378×35 at this width).
-WATERMARK_WIDTH_FRACTION = 0.35
+# Width of the watermark as a fraction of the output canvas width. 0.60 =
+# ~60 % wide on a 1080-wide canvas (~648 px). Sized to be clearly readable
+# even at TikTok / IG feed THUMBNAIL scale. Height auto-scales to preserve
+# the PNG's aspect ratio (the 678×63 source banner becomes ~648×60 here).
+# Iteration history: 0.18 (too small, barely legible) -> 0.35 (readable at
+# full-screen but not at thumbnail) -> 0.60 (current, "very visible" target).
+WATERMARK_WIDTH_FRACTION = 0.60
 
 # --- Audio policy (S6.1, S6.2, S6.3) ---------------------------------------- #
 # Static speech leveler. Single-pass `loudnorm` was the prior chain and is
