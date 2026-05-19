@@ -98,8 +98,9 @@ class SquareProcessor(Processor):
                 platform=platform, subtitles_path=str(ass_path),
                 layout=LAYOUT_NAME,
             )
+            # Keep .ass sidecar next to the mp4 — see vertical.py for why.
             if owns_ass:
-                ass_path.unlink(missing_ok=True)
+                sidecars["ass"] = ass_path
         else:
             self.log.warning(
                 "libass missing — rendering without burned-in captions; "

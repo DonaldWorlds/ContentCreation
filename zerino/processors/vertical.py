@@ -141,8 +141,14 @@ class VerticalProcessor(Processor):
                 platform=platform, subtitles_path=str(ass_path),
                 layout="vertical",
             )
+            # Keep the .ass sidecar next to the rendered mp4 — it's tiny
+            # (~few KB) and lets quality_verify report on caption style,
+            # text content, and language-script integrity without re-running
+            # Whisper. Was previously deleted post-burn; that was over-eager
+            # cleanup that erased the only ground-truth artifact of what
+            # got burned in.
             if owns_ass:
-                ass_path.unlink(missing_ok=True)
+                sidecars["ass"] = ass_path
         else:
             self.log.warning(
                 "libass missing — rendering without burned-in captions; "
