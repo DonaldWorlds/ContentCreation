@@ -52,6 +52,9 @@ def main() -> None:
     p_add.add_argument("--zernio-account-id", required=True,
                        help="24-char account id from Zernio")
     p_add.add_argument("--profile-id", default=None, help="Zernio profile id (optional)")
+    p_add.add_argument("--layout", choices=["vertical", "square", "split"],
+                       default="vertical",
+                       help="Render layout for this account (default: vertical)")
 
     # list
     sub.add_parser("list", help="List all registered accounts")

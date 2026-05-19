@@ -25,7 +25,44 @@ log = logging.getLogger("zerino.publishing.poster")
 _PLATFORM_MAP: dict[str, str] = {
     "youtube_shorts": "youtube",
     "facebook_reels": "facebook",
+    "instagram_reels": "instagram",
 }
+
+
+def _pin_title(caption: str) -> str | None:
+    """Pinterest pin title — first line of caption, trimmed to 100 chars
+    (PinterestPlatformData.title.max_length per the Zernio SDK model).
+    """
+    if not caption:
+        return None
+    first_line = (caption.splitlines() or [""])[0].strip()
+    if not first_line:
+        return None
+    return first_line[:100]
+
+
+def _platform_specific_data(
+    zernio_platform: str, caption: str
+) -> dict[str, Any] | None:
+    """Return the SDK `platformSpecificData` payload for a given platform,
+    or None if we have nothing platform-specific to send. The SDK accepts
+    a per-platform Pydantic model (PinterestPlatformData, etc.) on each
+    PlatformTarget entry; sending it makes the platform handle the post
+    as a proper native pin/post type rather than relying on defaults.
+    """
+    if zernio_platform == "pinterest":
+        # PinterestPlatformData — see late/models/_generated/models.py.
+        # Fields available: title (<=100), boardId, link, coverImageUrl,
+        # coverImageKeyFrameTime. Sending an explicit `title` makes the
+        # pin's text deterministic; the video flag comes from
+        # media_items[0].type="video" which we already set below. Pinterest
+        # auto-derives a cover frame from the video if we don't send one.
+        psd: dict[str, Any] = {}
+        title = _pin_title(caption)
+        if title:
+            psd["title"] = title
+        return psd or None
+    return None
 
 
 def dispatch_post(post_row: dict[str, Any]) -> str:
@@ -54,9 +91,22 @@ def dispatch_post(post_row: dict[str, Any]) -> str:
     if not scheduled_for:
         scheduled_for = datetime.now(timezone.utc).isoformat()
 
+    # Platform-target entry. For Pinterest (and any future platform that
+    # needs native-format hints), we attach platformSpecificData so the SDK
+    # routes the post as the correct native type (video pin vs static pin
+    # vs idea pin for Pinterest). Without this, Zernio uses defaults that
+    # historically degraded video pins to image-with-thumbnail.
+    platform_entry: dict[str, Any] = {
+        "platform": zernio_platform,
+        "accountId": zernio_account_id,
+    }
+    psd = _platform_specific_data(zernio_platform, caption)
+    if psd is not None:
+        platform_entry["platformSpecificData"] = psd
+
     payload: dict[str, Any] = {
         "content": caption,
-        "platforms": [{"platform": zernio_platform, "accountId": zernio_account_id}],
+        "platforms": [platform_entry],
         "media_items": [{"url": media_url, "type": media_type}],
         "scheduled_for": scheduled_for,
         "timezone": "UTC",
