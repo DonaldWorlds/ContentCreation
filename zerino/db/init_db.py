@@ -33,12 +33,16 @@ def create_database():
     # MARKERS
     # `kind` distinguishes hotkey source: F8 = talking_head, F9 = gameplay.
     # Downstream picks the render layout from this (square fill vs face+game split).
+    # `timestamp` is REAL (seconds since recording start) for sub-second
+    # precision — F8 at 12.7s of recording must round-trip as 12.7, not 12,
+    # or the clip window misses the streamer's actual reaction moment by up
+    # to a second. See S1.1 in CLIPPING_QUALITY_PLAN.md.
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS markers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         streamer_id INTEGER,
         recording_id INTEGER NOT NULL,
-        timestamp INTEGER NOT NULL,
+        timestamp REAL NOT NULL,
         kind TEXT NOT NULL DEFAULT 'talking_head'
             CHECK(kind IN ('talking_head','gameplay')),
         note TEXT,
@@ -49,14 +53,18 @@ def create_database():
     """)
   
     # CLIPS (PIPELINE CORE)
+    # `clip_start` / `clip_end` are REAL seconds so the clip window matches
+    # the float marker.timestamp exactly. ClipService derives them as
+    # `max(0, marker_time - PRE_BUFFER)` and `marker_time + (DURATION-PRE)`;
+    # truncating those to INTEGER lost sub-second alignment with the marker.
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS clips (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         recording_id INTEGER NOT NULL,
         marker_id INTEGER NOT NULL,
         video_file TEXT,
-        clip_start INTEGER NOT NULL,
-        clip_end INTEGER NOT NULL,
+        clip_start REAL NOT NULL,
+        clip_end REAL NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','completed','failed')),
         output_path TEXT,
         error_message TEXT,

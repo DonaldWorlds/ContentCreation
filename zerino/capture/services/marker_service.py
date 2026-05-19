@@ -35,7 +35,14 @@ class MarkerService:
                 print("[warn] Cannot create marker: recording start time not set")
                 return
 
-            timestamp = int(time.time() - start_time)
+            # Float, not int — F8 at 12.7s into a recording must produce
+            # marker.timestamp=12.7, not 12. Truncating to integer seconds
+            # shifted clip windows by up to a second, so the streamer's
+            # actual reaction moment landed off-frame in the rendered clip.
+            # The DB columns are SQLite REAL (or INTEGER-affinity, which also
+            # accepts float — type affinity is permissive) so float values
+            # round-trip cleanly.
+            timestamp = time.time() - start_time
 
             marker_id = self.marker_repo.insert_marker(
                 recording_id=recording_id,
@@ -45,6 +52,4 @@ class MarkerService:
                 note=None,
             )
 
-            self.state.setdefault("markers_temp", []).append(timestamp)
-
-        print(f"[ok] Marker created @ {timestamp}s (ID: {marker_id}, kind: {kind})")
+        print(f"[ok] Marker created @ {timestamp:.3f}s (ID: {marker_id}, kind: {kind})")

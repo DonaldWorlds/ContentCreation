@@ -75,7 +75,6 @@ def main() -> None:
     state: dict = {
         "lock": lock,
         "processed_files": set(),
-        "markers_temp": [],
         "active_monitors": [],
         "session_active": True,
         "current_streamer_id": streamer_id,

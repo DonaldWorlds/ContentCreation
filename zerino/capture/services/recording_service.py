@@ -7,6 +7,25 @@ from zerino.db.repositories.marker_repository import MarkerRepository
 from zerino.capture.services.queue_service import PipelineQueueService
 
 
+# How long after recording starts before stability detection is allowed to
+# trip. Replaces the old 10 MB hard size gate (S2.1) — that gate meant any
+# recording that ended under 10 MB (short tests, brief streams, accidental
+# stops) reset its stable counter forever and never triggered finish, so
+# the clip pipeline never ran on it. Time-based grace catches the same
+# "OBS hasn't started flushing yet" case without punishing short recordings.
+STABILITY_START_GRACE_SEC = 5.0
+
+# Number of consecutive POLL_INTERVAL_SEC polls of unchanged file size
+# before we declare the recording finished. 20 × 0.5s = 10s of stability,
+# which matches the log message. S2.2: the old value was 60 (= 30s), so
+# the user waited three times as long as the log claimed.
+STABILITY_POLL_COUNT = 20
+
+# Polling cadence. Used by monitor_recording's sleep AND by the stability
+# threshold above; keep them together so they can't drift.
+POLL_INTERVAL_SEC = 0.5
+
+
 class RecordingService:
     def __init__(self, state, recording_repo=None, marker_repo=None, pipeline_queue_service=None, lock=None):
         self.state = state
@@ -16,7 +35,6 @@ class RecordingService:
         self.pipeline_queue_service = pipeline_queue_service or PipelineQueueService()
         self.state.setdefault("processed_files", set())
         self.state.setdefault("pipeline_queue", [])
-        self.state.setdefault("markers_temp", [])
         self.state.setdefault("active_monitors", [])
         self.state.setdefault("session_active", True)
 
@@ -123,17 +141,13 @@ class RecordingService:
 
         print(f"Recording started | ID: {recording_id}")
 
-        streamer_id = self.state.get("current_streamer_id")
-        markers = self.state.get("markers_temp", [])
-        self.state["markers_temp"] = []
-        for ts in markers:
-            self.marker_repo.insert_marker(
-                recording_id=recording_id,
-                streamer_id=streamer_id,
-                timestamp=ts,
-                note=None,
-            )
-            print(f"Flushed marker @ {ts}s")
+        # NOTE (S1.2): the prior `markers_temp` flush was unreachable in
+        # marker_service (early-return when no recording is active) and
+        # broken when reached (carried previous recording's timestamps into
+        # the new recording's DB rows, and lost the F8/F9 `kind` field
+        # because the queue only held the timestamp). The whole mechanism
+        # was deleted. Markers can only land after a recording starts —
+        # which matches the OBS-first user flow anyway.
 
         thread = threading.Thread(target=self.monitor_recording, args=(file_path,), daemon=True)
         thread.start()
@@ -145,7 +159,7 @@ class RecordingService:
             if self.update_recording_progress(file_path):
                 self.finish_recording()
                 break
-            time.sleep(0.5)
+            time.sleep(POLL_INTERVAL_SEC)
 
     def update_recording_progress(self, file_path: Path) -> bool:
         with self.lock:
@@ -162,21 +176,28 @@ class RecordingService:
             last_size = recording.get("last_size", 0)
             stable_count = recording.get("stable_count", 0)
 
-            if current_size < 10 * 1024 * 1024:
+            # S2.1: start-grace. During the first STABILITY_START_GRACE_SEC
+            # seconds after recording begins, track the file size but do NOT
+            # let the stable-counter trip the finish — OBS may not have
+            # flushed its first keyframe yet, so an unchanging size early on
+            # doesn't mean "stopped." Replaces the broken 10 MB size gate.
+            elapsed = time.time() - recording.get("start_time", 0)
+            if elapsed < STABILITY_START_GRACE_SEC:
                 recording["stable_count"] = 0
                 recording["last_size"] = current_size
                 return False
 
             if current_size > last_size:
                 recording["stable_count"] = 0
-                print(f"📈 Growing: {current_size:,} bytes")
+                print(f"[grow] {current_size:,} bytes")
             else:
                 recording["stable_count"] = stable_count + 1
-                print(f"⏸️  Stable: {recording['stable_count']} checks")
+                print(f"[stable] {recording['stable_count']}/{STABILITY_POLL_COUNT} checks")
 
             recording["last_size"] = current_size
-            if recording["stable_count"] >= 60:
-                print("🛑 Recording stopped (stable for 10s)")
+            if recording["stable_count"] >= STABILITY_POLL_COUNT:
+                stable_sec = STABILITY_POLL_COUNT * POLL_INTERVAL_SEC
+                print(f"[end] Recording stopped (stable for {stable_sec:.0f}s)")
                 return True
             return False
 
@@ -203,4 +224,4 @@ class RecordingService:
 
     def queue_finished_recording(self, recording_id: int, filename: str) -> None:
         self.pipeline_queue_service.enqueue_recording_finished(recording_id, filename)
-        print(f"📦 Queued recording for pipeline: {filename}")
+        print(f"[queue] Queued recording for pipeline: {filename}")

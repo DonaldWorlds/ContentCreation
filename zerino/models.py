@@ -42,8 +42,18 @@ class ClipJob:
                        in this layout (e.g. 'square' for talking-head clips,
                        'split' for gameplay clips with face + game stacked).
                        None means honor each account's `layout` column.
-        metadata       Free-form bag for processor outputs (segment counts,
-                       caption-style version, etc.). Not persisted.
+        metadata       Cross-stage write-once cache. Router populates it
+                       once (today: `karaoke_segments` from the shared
+                       Whisper pass), then every processor in the fan-out
+                       reads from the SAME dict. Contract:
+                         - Router writes BEFORE dispatching to processors.
+                         - Processors are read-only — they do NOT mutate
+                           or add keys. Two processors writing to the
+                           same dict from different threads would race.
+                         - Not persisted. Discarded with the ClipJob.
+                       Future writers from outside Router must serialize
+                       before fan-out (write before the parallel section),
+                       or switch to per-target `copy.copy(metadata)`.
     """
     clip_id: int | None
     source_path: Path

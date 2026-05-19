@@ -59,6 +59,15 @@ def _apply_column_migrations(log) -> None:
             "TEXT NOT NULL DEFAULT 'talking_head'",
             log,
         )
+        # markers.timestamp / clips.clip_start / clips.clip_end are REAL
+        # (sub-second precision) in init_db.py as of S1.1. NO data migration
+        # is required on existing DBs because SQLite uses TYPE AFFINITY:
+        # an INTEGER-declared column stores REAL values without conversion
+        # and reads them back as Python floats. Old rows keep their integer
+        # values; new rows get float precision. Do NOT add an ALTER TABLE
+        # here — SQLite has no syntax to change a column's affinity, and
+        # the rename-table-and-copy alternative risks data loss without
+        # buying anything (affinity is already permissive).
         conn.commit()
     finally:
         conn.close()

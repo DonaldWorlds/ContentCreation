@@ -146,6 +146,12 @@ class Router:
         # its own .ass from cached segments instead of re-running Whisper. The
         # processors check job.metadata['karaoke_segments'] first and only fall
         # back to per-target transcription if it's missing.
+        #
+        # S3.2 contract: this is the ONLY writer to job.metadata. It runs
+        # serially before the per-target loop below, so by the time any
+        # processor reads job.metadata the dict is fully populated and
+        # immutable for the rest of the job. See ClipJob.metadata docstring
+        # for the read-only-after-Router rule.
         if (
             unique_targets
             and has_subtitles_filter()

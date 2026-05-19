@@ -13,7 +13,17 @@ log = get_logger("zerino.capture.clip_service")
 
 
 class ClipService:
-    CLIP_DURATION = 30
+    # 60 s is the sweet spot across the four target platforms:
+    #   - YouTube Shorts: max 60 s. 60.0s still uploads AS a Short.
+    #   - TikTok: long-form monetization tiers (Creator Rewards in some
+    #     regions) require >= 60 s; 60.0s qualifies in most.
+    #   - Facebook Reels: max 90 s. 60 s is well under.
+    #   - Twitter / X: 140 s default ceiling. 60 s is fine.
+    # 61+ would push YouTube uploads out of the Shorts feed (~10x less
+    # reach), so 60 is the global compromise. PRE_BUFFER stays at 10 so
+    # the streamer's pre-marker context survives; the 50 s of post-marker
+    # room covers the actual reaction.
+    CLIP_DURATION = 60
     PRE_BUFFER = 10
 
     # Marker kind → render layout. F8 (talking_head) is just-the-face → square
@@ -29,9 +39,22 @@ class ClipService:
         self.recording_repo = recording_repo or RecordingRepository()
 
     def process_single_marker(self, marker):
-        marker_time = marker["timestamp"]
-        start = max(0, marker_time - self.PRE_BUFFER)
-        end = marker_time + (self.CLIP_DURATION - self.PRE_BUFFER)
+        """Compute the (start, end) clip window for a single marker.
+
+        Window is always exactly CLIP_DURATION seconds long. When the
+        marker lands within PRE_BUFFER seconds of recording start, the
+        pre-roll is clamped to 0 and the post-roll extends accordingly —
+        so the clip stays full length instead of being truncated.
+
+        Pre-S3.1 bug: `end = marker_time + (CLIP_DURATION - PRE_BUFFER)`
+        anchored the end off the raw marker_time, ignoring the start
+        clamp. A marker at t=5 (PRE_BUFFER=10) produced start=0, end=25 —
+        a 25-second clip instead of 30. By anchoring end off the clamped
+        start we get the full CLIP_DURATION every time.
+        """
+        marker_time = float(marker["timestamp"])
+        start = max(0.0, marker_time - self.PRE_BUFFER)
+        end = start + self.CLIP_DURATION
 
         if start >= end:
             return None
