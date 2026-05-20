@@ -407,9 +407,19 @@ def _check_caption_geometry(captions: dict) -> dict:
     # Check 3 — caption sits BELOW the platform top safe area.
     above_safe_top = (margin_v >= top_safe)
 
-    # Check 4 — caption's bottom edge clears the heuristic face top.
-    # For talking_head clips, this means captions hover above the head.
-    face_clear = (caption_bottom_px < face_top_px)
+    # Check 4 — caption clears the face region. Logic differs by layout:
+    #   vertical / square: face is centred/below; captions hover ABOVE it,
+    #       so the caption's bottom edge must sit above the face-top line.
+    #   split: the FACE fills the TOP HALF and captions sit in the gameplay
+    #       (bottom) half BELOW the seam. "Clear" therefore means the
+    #       caption's TOP edge (MarginV) is at or below the seam (play_y/2),
+    #       NOT above a face-top line. Using the vertical rule here produced
+    #       a false-positive FAIL on every split clip.
+    seam_px = play_y / 2
+    if layout_hint == "split":
+        face_clear = (margin_v >= seam_px)
+    else:
+        face_clear = (caption_bottom_px < face_top_px)
 
     # Check 5 — alignment is top-center (8). Anything else and the rest of
     # the math is wrong anyway.
@@ -442,13 +452,21 @@ def _check_caption_geometry(captions: dict) -> dict:
             "The platform's UI (clock, notch, profile button) will overlay the caption."
         )
     if not face_clear:
-        fail_reasons.append(
-            f"Caption bottom edge at y={caption_bottom_px:.0f}px crosses the "
-            f"heuristic face-top line at y={face_top_px:.0f}px ({face_top_frac * 100:.0f}% down "
-            f"the {layout_hint} canvas). Captions will overlap the speaker's "
-            "face. (If the streamer's webcam is in a non-typical position, "
-            "this heuristic can false-positive — add face detection to disambiguate.)"
-        )
+        if layout_hint == "split":
+            fail_reasons.append(
+                f"MarginV={margin_v}px is ABOVE the seam at y={seam_px:.0f}px "
+                "(canvas midpoint). On a split layout the face fills the top "
+                "half, so captions must start at/below the seam in the "
+                "gameplay half. Raise MarginV to >= the seam."
+            )
+        else:
+            fail_reasons.append(
+                f"Caption bottom edge at y={caption_bottom_px:.0f}px crosses the "
+                f"heuristic face-top line at y={face_top_px:.0f}px ({face_top_frac * 100:.0f}% down "
+                f"the {layout_hint} canvas). Captions will overlap the speaker's "
+                "face. (If the streamer's webcam is in a non-typical position, "
+                "this heuristic can false-positive — add face detection to disambiguate.)"
+            )
     if not alignment_top_center:
         fail_reasons.append(
             f"Alignment={alignment} is not 8 (top-center). The other geometry "
