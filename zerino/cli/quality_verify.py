@@ -379,9 +379,15 @@ def _signalstats_avg(input_path: Path, work_dir: Path, pre_filter: str = "") -> 
     `pre_filter` is prepended (e.g. "sobel," to measure edge energy instead of
     raw levels). Returns averaged YMIN/YMAX/YAVG/UAVG/VAVG/SATAVG/YDIF, or an
     empty dict on failure.
+
+    The `metadata=print` output is written to STDOUT (`file=-`), not a temp
+    file: a Windows temp path (`C:\\...\\name.txt`) embedded in the filter arg
+    breaks the ffmpeg filtergraph parser (`:` is the option separator, `\\`
+    escapes), which silently produced an empty report on Windows. stdout has
+    no path to escape and is identical on every platform. `work_dir` is kept
+    in the signature for call-site compatibility but no longer used.
     """
-    metrics_file = work_dir / f".__signalstats_{abs(hash(pre_filter)) % 10000}.txt"
-    vf = f"fps={_SIGNAL_SAMPLE_FPS},{pre_filter}signalstats,metadata=print:file={metrics_file}"
+    vf = f"fps={_SIGNAL_SAMPLE_FPS},{pre_filter}signalstats,metadata=print:file=-"
     cmd = [
         "ffmpeg", "-hide_banner", "-nostdin", "-y",
         "-i", str(input_path),
@@ -389,23 +395,25 @@ def _signalstats_avg(input_path: Path, work_dir: Path, pre_filter: str = "") -> 
         "-an", "-f", "null", "-",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 or not metrics_file.exists():
-        return {}
+    # The null muxer writes nothing to stdout, so stdout is just the metadata
+    # print lines. (Some ffmpeg builds route metadata=print to stderr — scan
+    # both to be safe.)
+    text_out = (result.stdout or "") + "\n" + (result.stderr or "")
 
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
-    for line in metrics_file.read_text(errors="replace").splitlines():
+    for line in text_out.splitlines():
         line = line.strip()
-        if not line.startswith("lavfi.signalstats."):
+        marker = "lavfi.signalstats."
+        if marker not in line:
             continue
         try:
-            key, val = line.split("lavfi.signalstats.", 1)[1].split("=", 1)
+            key, val = line.split(marker, 1)[1].split("=", 1)
             f = float(val)
         except (ValueError, IndexError):
             continue
         sums[key] = sums.get(key, 0.0) + f
         counts[key] = counts.get(key, 0) + 1
-    metrics_file.unlink(missing_ok=True)
     return {k: round(sums[k] / counts[k], 3) for k in sums if counts[k]}
 
 
