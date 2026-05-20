@@ -229,19 +229,33 @@ The output dir contains:
 - `caption_sample.png` — frame at a dialogue-active timestamp (caption visible)
 - `spectrogram.png` — audio over time
 - `loudness.json` — ebur128 integrated / LRA / true peak
+- `encoding.json` — encoder + rate control, bitrate, levels/color, edge-energy
 - `ffprobe.json` — full stream info
 - `captions.json` — parsed .ass + Latin-script + geometry verdict
+
+**The "Encoding & signal quality" section** is the one that answers *actual* quality. It reads everything FROM the output file (no source needed), so the numbers are directly comparable between two renders — that's how you tell if a pipeline change made a clip softer / more starved / more orange:
+
+- **Encoder & rate control** — pulled from the x264/x265 settings stamped in the bitstream: encoder family, CRF/ABR/QP, and the tuning fingerprint (preset params, tune). If it's a hardware encoder (NVENC / VideoToolbox) the report says so and notes the internal RC isn't readable from the file.
+- **Bitrate** — measured avg + per-second peak/min (ABR starvation shows as a big peak-to-min spread) and **bits-per-pixel** (the real over-compression signal; < 0.04 = starved).
+- **Levels & color** — luma min/max (crushed blacks / blown highlights), chroma cast (V up + U down = the "orange skin" look), saturation (over-processing).
+- **Detail / scaling / sharpening** — a sobel edge-energy index: very low = soft / over-denoised, very high = ringing halos from over-sharpening or a bad upscale.
+
+Each problem becomes a one-line **flag** with the number and the fix.
 
 **Targets to compare against** (see [`CLIPPING_QUALITY_PLAN.md`](CLIPPING_QUALITY_PLAN.md) for the rationale on each):
 
 | Check | Target | Bad |
 |---|---|---|
 | Codec | h264 (High profile) | anything else |
+| Encoder / RC | libx264 CRF 18 (or NVENC CQ ~20) | ABR, CRF > 22 |
+| Bits per pixel | 0.05-0.20 | < 0.04 (starved) |
 | Video bit_rate | 5-12 Mbps actual | < 4 Mbps or > 12 Mbps |
 | Audio codec | aac | mp3, opus |
 | Audio bit_rate | 192-256 kbps | < 96 kbps |
 | Audio sample_rate | 48000 | other |
 | Color tags | bt709 × 4 explicit | "unknown" |
+| Luma min / max | ~16 / ~235 | YMIN < 12 (crush), YMAX > 245 (clip) |
+| Chroma (U / V avg) | near 128 | V up + U down (warm/orange cast) |
 | Integrated loudness | -14 ± 1 LUFS | < -16 or > -12 |
 | True peak | < -1.0 dBTP | > -0.5 dBTP |
 | Caption Latin-script | PASS | FAIL (Korean/Welsh/Maori) |

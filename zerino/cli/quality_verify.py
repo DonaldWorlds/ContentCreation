@@ -18,6 +18,13 @@ Outputs land in <out_dir>/<clip_stem>/:
           artifacts, silence handling visible at a glance)
     loudness.json
         - ebur128 integrated loudness, true peak, LRA
+    encoding.json
+        - encoder + rate control (CRF/ABR/QP) parsed from the x264/x265
+          bitstream SEI (or flagged hardware/NVENC when absent), measured
+          bitrate + bits-per-pixel, signalstats levels/color/saturation, and
+          a sobel edge-energy index for detail/scaling/sharpen/denoise. All
+          read from the output, so comparable across renders to catch a
+          regression (more starved, softer, more orange) between versions.
     ffprobe.json
         - raw ffprobe -show_streams -show_format dump
     captions.json  (only when an .ass sidecar is found)
@@ -177,6 +184,386 @@ def _loudness(input_path: Path) -> dict:
     parsed["ffmpeg_returncode"] = result.returncode
     parsed["raw_summary"] = block.strip()[:2000] if block.strip() else None
     return parsed
+
+
+# --- Encoding & signal-quality analysis (the "actual quality" question) ---- #
+# These functions answer: what encoder/rate-control produced this file, and
+# what do the pixels measure as — levels, color cast, saturation, edge energy.
+# Everything is read FROM THE OUTPUT (no source needed), so the numbers are
+# comparable across renders to catch a regression (softer, more starved,
+# more orange) between two versions of the pipeline.
+
+# Bits-per-pixel guidance for H.264 8-bit short-form. bpp = bitrate / (w*h*fps).
+# Below STARVED the encoder didn't have room for the content; above GENEROUS
+# we're wasting bytes the platform will re-compress away.
+BPP_STARVED = 0.04
+BPP_GENEROUS = 0.20
+
+# signalstats luma is full 0-255 on the decoded frame. Crushed blacks /
+# blown highlights thresholds (decoded values, not tv-range coded values).
+LUMA_CRUSH_BELOW = 12     # avg YMIN below this -> shadow detail clipped to black
+LUMA_CLIP_ABOVE = 245     # avg YMAX above this -> highlight detail clipped to white
+
+# Chroma neutral is 128. A consistent push of V up (red) and U down (blue)
+# is the "orange skin" cast the user complained about. Flag when the warm
+# vector exceeds this many code values.
+CHROMA_CAST_WARN = 8
+
+# SATAVG (0-~180ish typical). Very high average saturation reads as the
+# over-processed "candy" look after an eq saturation bump.
+SAT_HIGH_WARN = 90
+
+# Sobel edge-energy (avg luma of the sobel-filtered frame). Pure heuristic,
+# only meaningful relative to other renders of similar content, but the
+# extremes are diagnostic: very low = soft/over-denoised, very high = ringing
+# halos from over-sharpening. Labeled approximate in the report.
+SOBEL_SOFT_BELOW = 4.0
+SOBEL_HALO_ABOVE = 30.0
+
+# How densely to sample frames for the signal averages. The whole clip at a
+# low fps keeps the pass cheap (60 s -> ~180 frames) while averaging out
+# scene-to-scene swings.
+_SIGNAL_SAMPLE_FPS = 3
+
+# x264 option keys surfaced as "tuning" in the report (the preset fingerprint).
+_X264_TUNING_KEYS = (
+    "subme", "ref", "me", "merange", "trellis", "rc_lookahead",
+    "bframes", "b_adapt", "aq", "aq-mode", "psy_rd", "deblock",
+    "keyint", "mbtree", "weightp", "8x8dct",
+)
+
+
+def _read_head_tail_bytes(path: Path, head: int = 24 * 1024 * 1024,
+                          tail: int = 4 * 1024 * 1024) -> bytes:
+    """Read the first `head` and last `tail` bytes of a file.
+
+    The x264/x265 settings SEI lives in the first video packet, which with
+    `-movflags +faststart` sits right after the moov atom near the start.
+    We also grab the tail in case faststart wasn't applied. Avoids loading a
+    big mp4 fully into memory.
+    """
+    size = path.stat().st_size
+    with path.open("rb") as f:
+        if size <= head + tail:
+            return f.read()
+        front = f.read(head)
+        f.seek(size - tail)
+        back = f.read(tail)
+    return front + back
+
+
+def _extract_encoder_settings(input_path: Path, video_stream: dict) -> dict:
+    """Identify the encoder + rate control from the file.
+
+    libx264 / libx265 stamp a plain-ASCII settings string into the bitstream
+    SEI; we scan the bytes for it and parse the rate-control + tuning knobs.
+    Hardware encoders (NVENC, VideoToolbox) do NOT stamp this string, so when
+    it's absent we fall back to the ffprobe encoder tag and note that the
+    internal rate control isn't recoverable from the bitstream.
+    """
+    encoder_tag = (video_stream.get("tags") or {}).get("encoder", "")
+    result: dict = {
+        "encoder_tag": encoder_tag or None,
+        "encoder_family": None,
+        "settings_string": None,
+        "rate_control": None,
+        "crf": None,
+        "qp": None,
+        "target_bitrate_kbps": None,
+        "tuning": {},
+        "tune_hint": None,
+        "notes": [],
+    }
+
+    try:
+        blob = _read_head_tail_bytes(input_path)
+    except OSError as e:
+        result["notes"].append(f"could not read file bytes: {e}")
+        blob = b""
+
+    # libx264: "x264 - core NNN ... - options: key=val key=val ..."
+    m264 = re.search(rb"x264 - core.{0,1200}", blob, re.DOTALL)
+    m265 = re.search(rb"x265 \[info\].{0,1200}|x265 - core.{0,1200}", blob, re.DOTALL)
+
+    if m264:
+        s = m264.group(0).split(b"\x00", 1)[0].decode("latin-1", "replace")
+        result["encoder_family"] = "libx264"
+        result["settings_string"] = s[:1000]
+        opts = {}
+        if " - options: " in s:
+            for tok in s.split(" - options: ", 1)[1].split():
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    opts[k] = v
+        result["rate_control"] = opts.get("rc")
+        if "crf" in opts:
+            result["crf"] = _safe_float(opts["crf"])
+        if "qp" in opts:
+            result["qp"] = _safe_float(opts["qp"])
+        if "bitrate" in opts:
+            result["target_bitrate_kbps"] = _safe_float(opts["bitrate"])
+        result["tuning"] = {k: opts[k] for k in _X264_TUNING_KEYS if k in opts}
+        result["tune_hint"] = _infer_x264_tune(opts)
+    elif m265:
+        s = m265.group(0).split(b"\x00", 1)[0].decode("latin-1", "replace")
+        result["encoder_family"] = "libx265"
+        result["settings_string"] = s[:1000]
+        for key, rx in (("crf", r"crf=(\d+\.?\d*)"),
+                        ("qp", r"qp=(\d+)"),
+                        ("target_bitrate_kbps", r"bitrate=(\d+)")):
+            mm = re.search(rx, s)
+            if mm:
+                result[key] = _safe_float(mm.group(1))
+        if result["crf"] is not None:
+            result["rate_control"] = "crf"
+        elif result["target_bitrate_kbps"] is not None:
+            result["rate_control"] = "abr"
+    else:
+        # No x264/x265 SEI -> hardware or unknown encoder.
+        low = encoder_tag.lower()
+        if "nvenc" in low:
+            result["encoder_family"] = "h264_nvenc/hevc_nvenc"
+        elif "videotoolbox" in low:
+            result["encoder_family"] = "videotoolbox"
+        elif low:
+            result["encoder_family"] = encoder_tag
+        else:
+            result["encoder_family"] = "unknown"
+        result["notes"].append(
+            "no x264/x265 settings SEI found — hardware encoder (NVENC/"
+            "VideoToolbox) doesn't stamp one. Internal rate control isn't "
+            "recoverable from the bitstream; using ffprobe/packet bitrate only."
+        )
+
+    return result
+
+
+def _infer_x264_tune(opts: dict) -> str:
+    """Best-effort guess at the x264 -tune from its fingerprint params.
+
+    -tune film sets deblock=1:-1:-1; -tune grain raises deblock + disables
+    mbtree-ish behavior; -tune animation raises deblock+bframes+ref. Default
+    (no tune) is deblock=1:0:0, psy_rd=1.00:0.00. Approximate by design.
+    """
+    deblock = opts.get("deblock", "")
+    psy = opts.get("psy_rd", "")
+    if deblock == "1:-1:-1":
+        return "film (deblock=1:-1:-1)"
+    if deblock.startswith("1:-2") or deblock.startswith("-2"):
+        return "grain (heavy deblock loosening)"
+    if deblock == "1:0:0" and psy.startswith("1.00"):
+        return "none / default"
+    return f"non-default (deblock={deblock or '?'}, psy_rd={psy or '?'})"
+
+
+def _safe_float(v) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _signalstats_avg(input_path: Path, work_dir: Path, pre_filter: str = "") -> dict:
+    """Average signalstats metrics across frames sampled at _SIGNAL_SAMPLE_FPS.
+
+    `pre_filter` is prepended (e.g. "sobel," to measure edge energy instead of
+    raw levels). Returns averaged YMIN/YMAX/YAVG/UAVG/VAVG/SATAVG/YDIF, or an
+    empty dict on failure.
+    """
+    metrics_file = work_dir / f".__signalstats_{abs(hash(pre_filter)) % 10000}.txt"
+    vf = f"fps={_SIGNAL_SAMPLE_FPS},{pre_filter}signalstats,metadata=print:file={metrics_file}"
+    cmd = [
+        "ffmpeg", "-hide_banner", "-nostdin", "-y",
+        "-i", str(input_path),
+        "-vf", vf,
+        "-an", "-f", "null", "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not metrics_file.exists():
+        return {}
+
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for line in metrics_file.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line.startswith("lavfi.signalstats."):
+            continue
+        try:
+            key, val = line.split("lavfi.signalstats.", 1)[1].split("=", 1)
+            f = float(val)
+        except (ValueError, IndexError):
+            continue
+        sums[key] = sums.get(key, 0.0) + f
+        counts[key] = counts.get(key, 0) + 1
+    metrics_file.unlink(missing_ok=True)
+    return {k: round(sums[k] / counts[k], 3) for k in sums if counts[k]}
+
+
+def _bitrate_profile(input_path: Path) -> dict:
+    """Per-1-second video bitrate from packet sizes — avg / peak / min.
+
+    The peak/min spread shows ABR starvation (low-motion seconds dipping far
+    below average while the budget is spent elsewhere). For CRF the spread is
+    expected and benign; the report says so.
+    """
+    # compact key=value output (`pts_time=..|size=..`) so we parse by name,
+    # not by column position — ffprobe's CSV field order isn't guaranteed.
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "packet=pts_time,size",
+        "-of", "compact=p=0:nk=0", str(input_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    buckets: dict[int, int] = {}
+    for row in (result.stdout or "").splitlines():
+        fields = {}
+        for tok in row.split("|"):
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                fields[k] = v
+        try:
+            size = int(fields["size"])
+            t = float(fields["pts_time"])
+        except (KeyError, ValueError):
+            continue
+        buckets[int(t)] = buckets.get(int(t), 0) + size
+    if not buckets:
+        return {}
+    # Drop the last (partial) second so it doesn't read as a false dip.
+    secs = sorted(buckets)
+    if len(secs) > 2:
+        secs = secs[:-1]
+    kbps = [buckets[s] * 8 / 1000 for s in secs]
+    avg = sum(kbps) / len(kbps)
+    return {
+        "avg_kbps": round(avg, 1),
+        "peak_kbps": round(max(kbps), 1),
+        "min_kbps": round(min(kbps), 1),
+        "peak_to_avg": round(max(kbps) / avg, 2) if avg else None,
+        "min_to_avg": round(min(kbps) / avg, 2) if avg else None,
+        "seconds_measured": len(kbps),
+    }
+
+
+def _analyze_encoding(input_path: Path, probe: dict, work_dir: Path) -> dict:
+    """Top-level encoding + signal analysis. Returns a dict that feeds both
+    encoding.json and the summary's "Encoding & signal quality" section."""
+    video = _first_stream(probe, "video") or {}
+    fmt = probe.get("format", {})
+
+    width = int(video.get("width") or 0)
+    height = int(video.get("height") or 0)
+    fps = _eval_fraction(video.get("avg_frame_rate") or video.get("r_frame_rate"))
+    avg_bitrate_bps = float(fmt.get("bit_rate") or video.get("bit_rate") or 0)
+
+    enc = _extract_encoder_settings(input_path, video)
+    levels = _signalstats_avg(input_path, work_dir)
+    edges = _signalstats_avg(input_path, work_dir, pre_filter="sobel,")
+    bitrate = _bitrate_profile(input_path)
+
+    # Prefer the measured packet average; fall back to the container bitrate.
+    avg_kbps = bitrate.get("avg_kbps") or (avg_bitrate_bps / 1000 if avg_bitrate_bps else None)
+    bpp = None
+    if avg_kbps and width and height and fps:
+        bpp = round((avg_kbps * 1000) / (width * height * fps), 4)
+
+    flags: list[str] = []
+
+    # --- bitrate control ---
+    if bpp is not None:
+        if bpp < BPP_STARVED:
+            flags.append(
+                f"BITRATE STARVED: {bpp} bits/pixel (< {BPP_STARVED}). The "
+                "encoder didn't have room for this content — expect blocking / "
+                "smearing in motion. Lower CRF or raise maxrate."
+            )
+        elif bpp > BPP_GENEROUS:
+            flags.append(
+                f"BITRATE GENEROUS: {bpp} bits/pixel (> {BPP_GENEROUS}). Fine "
+                "for quality, but the platform will re-compress it away — you're "
+                "paying upload time for bytes the viewer never sees."
+            )
+
+    # --- color correction ---
+    cp = video.get("color_primaries")
+    if cp not in ("bt709", None):
+        flags.append(f"COLOR TAGS: primaries={cp} (not bt709) — may tint on some players.")
+    elif cp is None:
+        flags.append("COLOR TAGS: none written — some players guess BT.601 and tint playback.")
+
+    ymin, ymax = levels.get("YMIN"), levels.get("YMAX")
+    uavg, vavg, sat = levels.get("UAVG"), levels.get("VAVG"), levels.get("SATAVG")
+    if ymin is not None and ymin < LUMA_CRUSH_BELOW:
+        flags.append(
+            f"SHADOWS CRUSHED: avg YMIN={ymin} (< {LUMA_CRUSH_BELOW}). Shadow "
+            "detail clipped to black — a gamma/contrast bump on already-dark source."
+        )
+    if ymax is not None and ymax > LUMA_CLIP_ABOVE:
+        flags.append(
+            f"HIGHLIGHTS CLIPPED: avg YMAX={ymax} (> {LUMA_CLIP_ABOVE}). Highlight "
+            "detail blown to white."
+        )
+    if uavg is not None and vavg is not None:
+        warm = (vavg - 128) + (128 - uavg)  # red up + blue down = warm/orange
+        if (vavg - 128) > CHROMA_CAST_WARN and (128 - uavg) > CHROMA_CAST_WARN:
+            flags.append(
+                f"WARM/ORANGE CAST: UAVG={uavg}, VAVG={vavg} (neutral=128; warm "
+                f"vector={warm:.0f}). This is the 'orange skin' look — usually an "
+                "eq saturation/gamma push. Drop the color filter."
+            )
+    if sat is not None and sat > SAT_HIGH_WARN:
+        flags.append(
+            f"OVER-SATURATED: SATAVG={sat} (> {SAT_HIGH_WARN}). Reads as the "
+            "'candy' over-processed look."
+        )
+
+    # --- scaling / denoise / sharpening (sobel edge energy) ---
+    sobel = edges.get("YAVG")
+    if sobel is not None:
+        if sobel < SOBEL_SOFT_BELOW:
+            flags.append(
+                f"SOFT / OVER-DENOISED (approx): edge-energy index {sobel} "
+                f"(< {SOBEL_SOFT_BELOW}). Low detail — heavy denoise, a soft "
+                "upscale, or a starved encode. Compare against a known-good render."
+            )
+        elif sobel > SOBEL_HALO_ABOVE:
+            flags.append(
+                f"RINGING / OVER-SHARPENED (approx): edge-energy index {sobel} "
+                f"(> {SOBEL_HALO_ABOVE}). High edge contrast — likely unsharp halos "
+                "or lanczos ringing on an upscale. Drop unsharp; use bicubic on upscale."
+            )
+
+    return {
+        "dimensions": {"width": width, "height": height, "fps": fps},
+        "encoder": enc,
+        "bitrate": {
+            **bitrate,
+            "container_avg_kbps": round(avg_bitrate_bps / 1000, 1) if avg_bitrate_bps else None,
+            "bits_per_pixel": bpp,
+        },
+        "levels_color": {
+            "y_min_avg": ymin, "y_max_avg": ymax, "y_avg": levels.get("YAVG"),
+            "u_avg": uavg, "v_avg": vavg, "sat_avg": sat,
+            "temporal_diff_avg": levels.get("YDIF"),
+        },
+        "edge_energy": {"sobel_y_avg": sobel},
+        "flags": flags,
+        "verdict": "WARN" if flags else "OK",
+    }
+
+
+def _eval_fraction(s) -> float | None:
+    """Evaluate an ffprobe rational like '30000/1001' -> 29.97."""
+    if not s:
+        return None
+    try:
+        if "/" in str(s):
+            num, den = str(s).split("/", 1)
+            den_f = float(den)
+            return round(float(num) / den_f, 3) if den_f else None
+        return float(s)
+    except (ValueError, ZeroDivisionError):
+        return None
 
 
 def _parse_ass_timestamp(s: str) -> float:
@@ -511,6 +898,76 @@ def _pick_caption_sample_time(captions: dict, duration: float) -> float | None:
     return sample
 
 
+def _encoding_markdown(enc: dict) -> list[str]:
+    """Render the 'Encoding & signal quality' section from _analyze_encoding."""
+    e = enc.get("encoder", {})
+    br = enc.get("bitrate", {})
+    lc = enc.get("levels_color", {})
+    ee = enc.get("edge_energy", {})
+    dims = enc.get("dimensions", {})
+    tuning = e.get("tuning", {})
+
+    lines = [
+        "## Encoding & signal quality",
+        "",
+        f"**Verdict: {enc.get('verdict', '?')}**",
+        "",
+        "### Encoder & rate control",
+        "",
+        f"- **Encoder:** {e.get('encoder_family')}  (`{e.get('encoder_tag')}`)",
+        f"- **Rate control:** {e.get('rate_control') or '—'}"
+        + (f"  CRF={e.get('crf')}" if e.get('crf') is not None else "")
+        + (f"  QP={e.get('qp')}" if e.get('qp') is not None else "")
+        + (f"  target={e.get('target_bitrate_kbps')} kbps" if e.get('target_bitrate_kbps') is not None else ""),
+        f"- **Tune (inferred):** {e.get('tune_hint') or '—'}",
+    ]
+    if tuning:
+        params = ", ".join(f"{k}={v}" for k, v in tuning.items())
+        lines.append(f"- **x264/x265 tuning params:** {params}")
+    for note in e.get("notes", []):
+        lines.append(f"- _note:_ {note}")
+
+    lines += [
+        "",
+        "### Bitrate",
+        "",
+        f"- **Avg (measured):** {br.get('avg_kbps')} kbps  "
+        f"(container reports {br.get('container_avg_kbps')} kbps)",
+        f"- **Peak / Min per second:** {br.get('peak_kbps')} / {br.get('min_kbps')} kbps  "
+        f"(peak/avg={br.get('peak_to_avg')}, min/avg={br.get('min_to_avg')})",
+        f"- **Bits per pixel:** {br.get('bits_per_pixel')}  "
+        f"(starved < {BPP_STARVED}, generous > {BPP_GENEROUS}; "
+        f"resolution {dims.get('width')}x{dims.get('height')} @ {dims.get('fps')} fps)",
+        "",
+        "### Levels & color (signalstats, clip average)",
+        "",
+        f"- **Luma:** YMIN={lc.get('y_min_avg')} (crush < {LUMA_CRUSH_BELOW}), "
+        f"YAVG={lc.get('y_avg')}, YMAX={lc.get('y_max_avg')} (clip > {LUMA_CLIP_ABOVE})",
+        f"- **Chroma:** UAVG={lc.get('u_avg')}, VAVG={lc.get('v_avg')}  "
+        f"(neutral=128; V up + U down = warm/orange)",
+        f"- **Saturation:** SATAVG={lc.get('sat_avg')}  (high > {SAT_HIGH_WARN} = over-processed)",
+        f"- **Temporal diff:** YDIF={lc.get('temporal_diff_avg')}  (motion/noise proxy)",
+        "",
+        "### Detail / scaling / sharpening (sobel edge-energy, approx)",
+        "",
+        f"- **Edge-energy index:** {ee.get('sobel_y_avg')}  "
+        f"(soft/over-denoised < {SOBEL_SOFT_BELOW}, halos/over-sharp > {SOBEL_HALO_ABOVE}; "
+        "compare across renders of similar content)",
+        "",
+    ]
+
+    flags = enc.get("flags", [])
+    if flags:
+        lines.append("### Flags")
+        lines.append("")
+        for f in flags:
+            lines.append(f"- {f}")
+    else:
+        lines.append("_No encoding/signal flags raised._")
+    lines.append("")
+    return lines
+
+
 def _summary_markdown(
     input_path: Path,
     probe: dict,
@@ -520,6 +977,7 @@ def _summary_markdown(
     compare_dir: Path | None,
     captions: dict | None = None,
     caption_sample_file: Path | None = None,
+    encoding: dict | None = None,
 ) -> str:
     video = _first_stream(probe, "video") or {}
     audio = _first_stream(probe, "audio") or {}
@@ -569,9 +1027,15 @@ def _summary_markdown(
         f"- **Loudness range:** {loudness.get('loudness_range_lu')} LU  (target: ~7 LU for short-form)",
         f"- **True peak:** {loudness.get('true_peak_dbtp')} dBTP  (must be < -1.0 dBTP to survive platform re-encode)",
         "",
+    ]
+
+    if encoding is not None:
+        lines.extend(_encoding_markdown(encoding))
+
+    lines.extend([
         "## Inspection artifacts",
         "",
-    ]
+    ])
     for f in frame_files:
         lines.append(f"- ![{f.name}]({f.name})")
     if caption_sample_file is not None:
@@ -730,6 +1194,20 @@ def verify(
         loudness.get("true_peak_dbtp"),
     )
 
+    # Encoding + signal-quality analysis (encoder/rate-control, bitrate,
+    # levels/color, edge-energy). Read from the output only — comparable
+    # across renders to catch regressions.
+    encoding = _analyze_encoding(input_path, probe, out_dir)
+    (out_dir / "encoding.json").write_text(json.dumps(encoding, indent=2), encoding="utf-8")
+    enc_e = encoding.get("encoder", {})
+    log.info(
+        "encoding: %s rc=%s crf=%s  bpp=%s  sobel=%s  verdict=%s",
+        enc_e.get("encoder_family"), enc_e.get("rate_control"), enc_e.get("crf"),
+        encoding.get("bitrate", {}).get("bits_per_pixel"),
+        encoding.get("edge_energy", {}).get("sobel_y_avg"),
+        encoding.get("verdict"),
+    )
+
     # Caption sidecar (.ass next to the input mp4) — added by S4.x. When
     # present, parse it, save a captions.json summary, and pull one extra
     # frame at a dialogue-active timestamp so the burnt-in captions are
@@ -777,6 +1255,7 @@ def verify(
     summary = _summary_markdown(
         input_path, probe, loudness, frame_files, spectrogram_path, compare_dir,
         captions=captions, caption_sample_file=caption_sample_path,
+        encoding=encoding,
     )
     (out_dir / "summary.md").write_text(summary, encoding="utf-8")
 

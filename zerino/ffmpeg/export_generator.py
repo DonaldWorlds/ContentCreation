@@ -123,6 +123,17 @@ COLOR_TAG_ARGS = [
     "-color_range", "tv",
 ]
 
+# Output-side -color_* flags alone DON'T fully tag the stream: when the source
+# frames carry unknown primaries/transfer (OBS recordings do), the scaler
+# propagates "unknown" and libx264 writes only matrix_coefficients (colorspace)
+# into the VUI — color_primaries / color_transfer come back "unknown" on the
+# output. Stamping the frames with `setparams` as the LAST video filter forces
+# libx264 to write the full colour_description (all four tags = bt709/tv). Must
+# sit at the end of every video chain, after crop/scale/subtitles.
+SETPARAMS_BT709 = (
+    "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
+)
+
 # --- Split-layout filter constants (S6.5) ----------------------------------- #
 # Softened denoise. Was 1.5/1.5/6/6, which over-smoothed skin across frames
 # (Snapchat-skin look). 1.0/1.0/3/3 keeps webcam grain texture and only
@@ -549,6 +560,11 @@ class ExportGenerator:
                 f"{subtitles_filter(Path(subtitles_path), play_res_x=config['canvas_width'], play_res_y=config['canvas_height'])}"
             )
 
+        # Stamp the full bt709 colour_description onto the frames as the last
+        # video filter (output -color_* flags alone leave primaries/transfer
+        # "unknown" on OBS-sourced frames).
+        vf = f"{vf},{SETPARAMS_BT709}"
+
         af = self.build_audio_filter(duration)
 
         command = [
@@ -696,6 +712,12 @@ class ExportGenerator:
             graph_parts.append(f"[{current_label}]{sub}[v_subs]")
             current_label = "v_subs"
 
+        # Stamp the full bt709 colour_description onto the frames as the last
+        # video filter (output -color_* flags alone leave primaries/transfer
+        # "unknown" on OBS-sourced frames).
+        graph_parts.append(f"[{current_label}]{SETPARAMS_BT709}[v_out]")
+        current_label = "v_out"
+
         video_map = f"[{current_label}]"
         filter_complex = ";".join(graph_parts)
         af = self.build_audio_filter(duration)
@@ -838,6 +860,12 @@ class ExportGenerator:
             graph_parts.append(f"[{current_label}]{sub}[v_subs]")
             current_label = "v_subs"
 
+        # Stamp the full bt709 colour_description onto the frames as the last
+        # video filter (output -color_* flags alone leave primaries/transfer
+        # "unknown" on OBS-sourced frames).
+        graph_parts.append(f"[{current_label}]{SETPARAMS_BT709}[v_out]")
+        current_label = "v_out"
+
         video_map = f"[{current_label}]"
         filter_complex = ";".join(graph_parts)
         af = self.build_audio_filter(duration)
@@ -940,6 +968,12 @@ class ExportGenerator:
             graph_parts.append(f"[{current_label}]{sub}[v_subs]")
             current_label = "v_subs"
 
+        # Stamp the full bt709 colour_description onto the frames as the last
+        # video filter (output -color_* flags alone leave primaries/transfer
+        # "unknown" on OBS-sourced frames).
+        graph_parts.append(f"[{current_label}]{SETPARAMS_BT709}[v_out]")
+        current_label = "v_out"
+
         video_map = f"[{current_label}]"
         filter_complex = ";".join(graph_parts)
         af = self.build_audio_filter(duration)
@@ -1002,6 +1036,8 @@ class ExportGenerator:
         if subtitles_path is not None:
             from zerino.processors._captions import subtitles_filter
             vf = f"{vf},{subtitles_filter(Path(subtitles_path))}"
+
+        vf = f"{vf},{SETPARAMS_BT709}"
 
         af = self.build_audio_filter(metadata.get("duration"))
 
