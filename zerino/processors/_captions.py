@@ -22,7 +22,13 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-WHISPER_MODEL_SIZE = "small"
+# Model size drives word-timestamp accuracy, which is what makes captions
+# land ON the spoken word. `small` produced jittery word timing (captions
+# early on some words, late on others). `medium` has materially better
+# word-level alignment. Cost: ~2-3x slower transcription + a one-time
+# ~1.5 GB model download on first run. Worth it — caption sync is a core
+# quality signal. Bump to `large-v3` if medium still drifts on fast speech.
+WHISPER_MODEL_SIZE = "medium"
 WORDS_PER_CHUNK = 3   # how many words sit on screen at once during karaoke
 
 # Caption timing shift. POSITIVE values delay captions (appear later);
@@ -56,11 +62,11 @@ WHISPER_CONDITION_ON_PREVIOUS_TEXT = False
 WHISPER_VAD_FILTER = True
 WHISPER_VAD_PARAMETERS = {"min_silence_duration_ms": 500}
 
-# Greedy decode. beam_size=5 was ~3-5x slower than greedy with marginal
-# accuracy gain on short standalone windows. The user-visible quality of
-# karaoke captions depends far more on language correctness + VAD than on
-# beam search.
-WHISPER_BEAM_SIZE = 1
+# Beam search. Reverted from greedy (1) back to 5: greedy decoding produced
+# less stable word-level timestamps, contributing to the caption early/late
+# drift. Beam 5 gives steadier alignment at a modest speed cost (small next
+# to the medium-model bump above).
+WHISPER_BEAM_SIZE = 5
 
 _log = logging.getLogger("zerino.processors.captions")
 _whisper_model = None  # process-wide cache

@@ -53,17 +53,26 @@ HALF_HEIGHT = CANVAS_HEIGHT // 2  # 960
 # Current values match the operator's live OBS scene:
 #   Webcam:       Position X=0, Y=777, Bounding Box 546 x 303 (small
 #                 bottom-left overlay; rest of canvas is full-screen game).
-#   Game capture: full-screen behind the webcam; we crop the right half
-#                 (960..1920) which the bottom-left cam never covers.
+#   Game capture: full-screen behind the webcam.
 #
-# QUALITY NOTE: the face region is upscaled to fill the 1080x960 top panel.
-# 546x303 (~165k source px) is a ~3.2x linear upscale -> SOFT face (the
-# original code called a similar 480x270 box "1995 webcam quality"). If the
-# face looks too soft in the render, enlarge the OBS webcam box and bump
-# these numbers (e.g. 960x540 = ~1.8x upscale = visibly sharper). Tradeoff:
-# a bigger webcam box covers more gameplay in the live stream.
+# GAME_BOX is the FULL source frame (0,0,1920,1080), NOT the right half.
+# The old right-half crop (960..1920) pushed the player + crosshair to the
+# edge and cut off the CENTRE of the action. With the full frame, the
+# downstream cover-scale (force_original_aspect_ratio=increase + centre
+# crop) lands the CENTRE of the gameplay — crosshair, character, kills —
+# centred in the 1080x960 bottom panel. A 16:9 source covering a 1.125:1
+# panel shows the centre ~63% of the width (far-edge HUD corners trimmed);
+# the action stays centred and big. The bottom-left webcam (ends at x=546,
+# y=777) is cropped out by the centre crop, so it never bleeds into the
+# game half.
+#
+# FACE QUALITY NOTE: the face region is upscaled to fill the 1080x960 top
+# panel. 546x303 (~165k source px) is a ~3.2x linear upscale -> SOFT face.
+# If too soft, enlarge the OBS webcam box and bump FACE_BOX to match
+# (e.g. 960x540 = ~1.8x upscale = sharper). Tradeoff: a bigger webcam box
+# covers more gameplay in the live stream.
 FACE_BOX = (0, 777, 546, 303)
-GAME_BOX = (960, 0, 960, 1080)
+GAME_BOX = (0, 0, 1920, 1080)
 
 # Captions just below the seam (y=960) — over the top of the gameplay half
 # where they're readable without covering the face. Alignment=8 (top-center)
