@@ -1,0 +1,202 @@
+{
+  "play_res": {
+    "x": 1080,
+    "y": 1080
+  },
+  "style": {
+    "name": "Default",
+    "fontname": "Marker Felt",
+    "fontsize": "72",
+    "primary_colour": "&H000000FF",
+    "secondary_colour": "&H000000FF",
+    "outline_colour": "&H00000000",
+    "back_colour": "&H00000000",
+    "bold": "1",
+    "border_style": "1",
+    "outline": "5",
+    "alignment": "8",
+    "margin_l": "0",
+    "margin_r": "0",
+    "margin_v": "240"
+  },
+  "dialogues": [
+    {
+      "start": 3.18,
+      "end": 3.88,
+      "text_raw": "{\\c&H0000FFFF&}Don't{\\c&H000000FF&} don't like",
+      "text_plain": "Don't don't like"
+    },
+    {
+      "start": 3.88,
+      "end": 4.12,
+      "text_raw": "Don't {\\c&H0000FFFF&}don't{\\c&H000000FF&} like",
+      "text_plain": "Don't don't like"
+    },
+    {
+      "start": 4.12,
+      "end": 4.4,
+      "text_raw": "Don't don't {\\c&H0000FFFF&}like{\\c&H000000FF&}",
+      "text_plain": "Don't don't like"
+    },
+    {
+      "start": 4.4,
+      "end": 4.66,
+      "text_raw": "{\\c&H0000FFFF&}like{\\c&H000000FF&} like",
+      "text_plain": "like like"
+    },
+    {
+      "start": 4.66,
+      "end": 4.96,
+      "text_raw": "like {\\c&H0000FFFF&}like{\\c&H000000FF&}",
+      "text_plain": "like like"
+    },
+    {
+      "start": 5.92,
+      "end": 6.44,
+      "text_raw": "{\\c&H0000FFFF&}Look{\\c&H000000FF&} at it.",
+      "text_plain": "Look at it."
+    },
+    {
+      "start": 6.44,
+      "end": 6.96,
+      "text_raw": "Look {\\c&H0000FFFF&}at{\\c&H000000FF&} it.",
+      "text_plain": "Look at it."
+    },
+    {
+      "start": 6.96,
+      "end": 7.04,
+      "text_raw": "Look at {\\c&H0000FFFF&}it.{\\c&H000000FF&}",
+      "text_plain": "Look at it."
+    },
+    {
+      "start": 17.56,
+      "end": 18.16,
+      "text_raw": "{\\c&H0000FFFF&}Yeah,{\\c&H000000FF&} bitch. Mr.",
+      "text_plain": "Yeah, bitch. Mr."
+    },
+    {
+      "start": 18.16,
+      "end": 19.08,
+      "text_raw": "Yeah, {\\c&H0000FFFF&}bitch.{\\c&H000000FF&} Mr.",
+      "text_plain": "Yeah, bitch. Mr."
+    },
+    {
+      "start": 19.08,
+      "end": 19.6,
+      "text_raw": "Yeah, bitch. {\\c&H0000FFFF&}Mr.{\\c&H000000FF&}",
+      "text_plain": "Yeah, bitch. Mr."
+    },
+    {
+      "start": 19.72,
+      "end": 19.96,
+      "text_raw": "{\\c&H0000FFFF&}Don{\\c&H000000FF&} in this",
+      "text_plain": "Don in this"
+    },
+    {
+      "start": 19.96,
+      "end": 20.18,
+      "text_raw": "Don {\\c&H0000FFFF&}in{\\c&H000000FF&} this",
+      "text_plain": "Don in this"
+    },
+    {
+      "start": 20.18,
+      "end": 20.44,
+      "text_raw": "Don in {\\c&H0000FFFF&}this{\\c&H000000FF&}",
+      "text_plain": "Don in this"
+    },
+    {
+      "start": 20.44,
+      "end": 20.74,
+      "text_raw": "{\\c&H0000FFFF&}bitch{\\c&H000000FF&} have enough",
+      "text_plain": "bitch have enough"
+    },
+    {
+      "start": 20.74,
+      "end": 21.5,
+      "text_raw": "bitch {\\c&H0000FFFF&}have{\\c&H000000FF&} enough",
+      "text_plain": "bitch have enough"
+    },
+    {
+      "start": 21.5,
+      "end": 21.8,
+      "text_raw": "bitch have {\\c&H0000FFFF&}enough{\\c&H000000FF&}",
+      "text_plain": "bitch have enough"
+    },
+    {
+      "start": 21.8,
+      "end": 22.36,
+      "text_raw": "{\\c&H0000FFFF&}have{\\c&H000000FF&} enough to",
+      "text_plain": "have enough to"
+    },
+    {
+      "start": 22.36,
+      "end": 22.54,
+      "text_raw": "have {\\c&H0000FFFF&}enough{\\c&H000000FF&} to",
+      "text_plain": "have enough to"
+    },
+    {
+      "start": 22.54,
+      "end": 22.74,
+      "text_raw": "have enough {\\c&H0000FFFF&}to{\\c&H000000FF&}",
+      "text_plain": "have enough to"
+    },
+    {
+      "start": 22.74,
+      "end": 23.0,
+      "text_raw": "{\\c&H0000FFFF&}cope{\\c&H000000FF&} with your",
+      "text_plain": "cope with your"
+    },
+    {
+      "start": 23.0,
+      "end": 23.18,
+      "text_raw": "cope {\\c&H0000FFFF&}with{\\c&H000000FF&} your",
+      "text_plain": "cope with your"
+    },
+    {
+      "start": 23.18,
+      "end": 23.3,
+      "text_raw": "cope with {\\c&H0000FFFF&}your{\\c&H000000FF&}",
+      "text_plain": "cope with your"
+    },
+    {
+      "start": 23.3,
+      "end": 23.62,
+      "text_raw": "{\\c&H0000FFFF&}bitch{\\c&H000000FF&}",
+      "text_plain": "bitch"
+    }
+  ],
+  "dialogue_count": 24,
+  "latin_script_ok": true,
+  "non_latin_examples": [],
+  "geometry": {
+    "metrics": {
+      "play_res": {
+        "x": 1080,
+        "y": 1080
+      },
+      "layout_inferred": "square",
+      "fontsize_pt": 72.0,
+      "line_height_px": 100.8,
+      "line_height_pct_of_canvas": 9.33,
+      "margin_v_px": 240,
+      "margin_l_px": 0,
+      "margin_r_px": 0,
+      "alignment": 8,
+      "caption_bottom_px": 340.8,
+      "face_top_heuristic_px": 216.0,
+      "top_safe_area_px": 90
+    },
+    "checks": {
+      "size_ok": false,
+      "centering_ok": true,
+      "above_safe_top": true,
+      "face_clear (heuristic)": false,
+      "alignment_top_center": true
+    },
+    "verdict": "FAIL",
+    "fail_reasons": [
+      "FontSize 72.0pt produces a line ~101px tall (9.3% of canvas) — exceeds the 8% max. Captions will dominate the frame ('letters take up whole clip').",
+      "Caption bottom edge at y=341px crosses the heuristic face-top line at y=216px (20% down the square canvas). Captions will overlap the speaker's face. (If the streamer's webcam is in a non-typical position, this heuristic can false-positive — add face detection to disambiguate.)"
+    ]
+  }
+}

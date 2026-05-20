@@ -1,0 +1,8 @@
+{
+  "integrated_lufs": -15.3,
+  "loudness_range_lu": 7.2,
+  "true_peak_dbtp": -0.0,
+  "threshold_lufs": -25.5,
+  "ffmpeg_returncode": 0,
+  "raw_summary": "Summary:\n\n  Integrated loudness:\n    I:         -15.3 LUFS\n    Threshold: -25.5 LUFS\n\n  Loudness range:\n    LRA:         7.2 LU\n    Threshold: -35.6 LUFS\n    LRA low:   -20.0 LUFS\n    LRA high:  -12.7 LUFS\n\n  True peak:\n    Peak:       -0.0 dBFS\n[out#0/null @ 000002654039b040] video:1490KiB audio:11252KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe= 3599 fps=1337 q=-0.0 Lsize=N/A time=00:01:00.00 bitrate=N/A speed=22.3x elapsed=0:00:02.69"
+}
