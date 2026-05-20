@@ -1,0 +1,63 @@
+{
+  "dimensions": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 60.0
+  },
+  "encoder": {
+    "encoder_tag": "Lavc62.28.100 libx264",
+    "encoder_family": "libx264",
+    "settings_string": "x264 - core 165 r3223 0480cb0 - H.264/MPEG-4 AVC codec - Copyleft 2003-2025 - http://www.videolan.org/x264.html - options: cabac=1 ref=4 deblock=1:0:0 analyse=0x3:0x113 me=hex subme=8 psy=1 psy_rd=1.00:0.00 mixed_ref=1 me_range=16 chroma_me=1 trellis=2 8x8dct=1 cqm=0 deadzone=21,11 fast_pskip=1 chroma_qp_offset=-2 threads=24 lookahead_threads=4 sliced_threads=0 nr=0 decimate=1 interlaced=0 bluray_compat=0 constrained_intra=0 bframes=3 b_pyramid=2 b_adapt=1 b_bias=0 direct=3 weightb=1 open_gop=0 weightp=2 keyint=250 keyint_min=25 scenecut=40 intra_refresh=0 rc_lookahead=50 rc=crf mbtree=1 crf=18.0 qcomp=0.60 qpmin=0 qpmax=69 qpstep=4 vbv_maxrate=14000 vbv_bufsize=28000 crf_max=0.0 nal_hrd=none filler=0 ip_ratio=1.40 aq=3:1.00",
+    "rate_control": "crf",
+    "crf": 18.0,
+    "qp": null,
+    "target_bitrate_kbps": null,
+    "tuning": {
+      "subme": "8",
+      "ref": "4",
+      "me": "hex",
+      "trellis": "2",
+      "rc_lookahead": "50",
+      "bframes": "3",
+      "b_adapt": "1",
+      "aq": "3:1.00",
+      "psy_rd": "1.00:0.00",
+      "deblock": "1:0:0",
+      "keyint": "250",
+      "mbtree": "1",
+      "weightp": "2",
+      "8x8dct": "1"
+    },
+    "tune_hint": "none / default",
+    "notes": []
+  },
+  "bitrate": {
+    "avg_kbps": 8474.5,
+    "peak_kbps": 16511.8,
+    "min_kbps": 3484.0,
+    "peak_to_avg": 1.95,
+    "min_to_avg": 0.41,
+    "seconds_measured": 59,
+    "container_avg_kbps": 8755.4,
+    "bits_per_pixel": 0.0681
+  },
+  "levels_color": {
+    "y_min_avg": null,
+    "y_max_avg": null,
+    "y_avg": null,
+    "u_avg": null,
+    "v_avg": null,
+    "sat_avg": null,
+    "temporal_diff_avg": null,
+    "color_range": "tv",
+    "crush_below": 14.0,
+    "clip_above": 237.0
+  },
+  "edge_energy": {
+    "sobel_y_avg": null
+  },
+  "flags": [
+    "COLOR TAGS: none written \u2014 some players guess BT.601 and tint playback."
+  ],
+  "verdict": "WARN"
+}

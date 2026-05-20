@@ -1,0 +1,54 @@
+{
+  "play_res": {
+    "x": 1080,
+    "y": 1920
+  },
+  "style": {
+    "name": "Default",
+    "fontname": "Marker Felt",
+    "fontsize": "72",
+    "primary_colour": "&H000000FF",
+    "secondary_colour": "&H000000FF",
+    "outline_colour": "&H00000000",
+    "back_colour": "&H00000000",
+    "bold": "1",
+    "border_style": "1",
+    "outline": "5",
+    "alignment": "8",
+    "margin_l": "0",
+    "margin_r": "0",
+    "margin_v": "1020"
+  },
+  "dialogues": [],
+  "dialogue_count": 0,
+  "latin_script_ok": true,
+  "non_latin_examples": [],
+  "geometry": {
+    "metrics": {
+      "play_res": {
+        "x": 1080,
+        "y": 1920
+      },
+      "layout_inferred": "split",
+      "fontsize_pt": 72.0,
+      "line_height_px": 100.8,
+      "line_height_pct_of_canvas": 5.25,
+      "margin_v_px": 1020,
+      "margin_l_px": 0,
+      "margin_r_px": 0,
+      "alignment": 8,
+      "caption_bottom_px": 1120.8,
+      "face_top_heuristic_px": 864.0,
+      "top_safe_area_px": 120
+    },
+    "checks": {
+      "size_ok": true,
+      "centering_ok": true,
+      "above_safe_top": true,
+      "face_clear (heuristic)": true,
+      "alignment_top_center": true
+    },
+    "verdict": "PASS",
+    "fail_reasons": []
+  }
+}

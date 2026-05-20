@@ -1,0 +1,115 @@
+{
+  "play_res": {
+    "x": 1080,
+    "y": 1920
+  },
+  "style": {
+    "name": "Default",
+    "fontname": "Marker Felt",
+    "fontsize": "72",
+    "primary_colour": "&H000000FF",
+    "secondary_colour": "&H000000FF",
+    "outline_colour": "&H00000000",
+    "back_colour": "&H00000000",
+    "bold": "1",
+    "border_style": "1",
+    "outline": "5",
+    "alignment": "8",
+    "margin_l": "0",
+    "margin_r": "0",
+    "margin_v": "1020"
+  },
+  "dialogues": [
+    {
+      "start": 0.56,
+      "end": 1.28,
+      "text_raw": "{\\c&H0000FFFF&}Oh{\\c&H000000FF&} my fucking",
+      "text_plain": "Oh my fucking"
+    },
+    {
+      "start": 1.28,
+      "end": 1.48,
+      "text_raw": "Oh {\\c&H0000FFFF&}my{\\c&H000000FF&} fucking",
+      "text_plain": "Oh my fucking"
+    },
+    {
+      "start": 1.48,
+      "end": 2.1,
+      "text_raw": "Oh my {\\c&H0000FFFF&}fucking{\\c&H000000FF&}",
+      "text_plain": "Oh my fucking"
+    },
+    {
+      "start": 2.1,
+      "end": 2.58,
+      "text_raw": "{\\c&H0000FFFF&}god,{\\c&H000000FF&} I'm tired",
+      "text_plain": "god, I'm tired"
+    },
+    {
+      "start": 2.58,
+      "end": 3.12,
+      "text_raw": "god, {\\c&H0000FFFF&}I'm{\\c&H000000FF&} tired",
+      "text_plain": "god, I'm tired"
+    },
+    {
+      "start": 3.12,
+      "end": 3.17,
+      "text_raw": "god, I'm {\\c&H0000FFFF&}tired{\\c&H000000FF&}",
+      "text_plain": "god, I'm tired"
+    },
+    {
+      "start": 3.12,
+      "end": 3.18,
+      "text_raw": "{\\c&H0000FFFF&}of{\\c&H000000FF&} shit game",
+      "text_plain": "of shit game"
+    },
+    {
+      "start": 3.18,
+      "end": 3.4,
+      "text_raw": "of {\\c&H0000FFFF&}shit{\\c&H000000FF&} game",
+      "text_plain": "of shit game"
+    },
+    {
+      "start": 3.4,
+      "end": 3.72,
+      "text_raw": "of shit {\\c&H0000FFFF&}game{\\c&H000000FF&}",
+      "text_plain": "of shit game"
+    },
+    {
+      "start": 22.64,
+      "end": 23.42,
+      "text_raw": "{\\c&H0000FFFF&}Should{\\c&H000000FF&}",
+      "text_plain": "Should"
+    }
+  ],
+  "dialogue_count": 10,
+  "latin_script_ok": true,
+  "non_latin_examples": [],
+  "geometry": {
+    "metrics": {
+      "play_res": {
+        "x": 1080,
+        "y": 1920
+      },
+      "layout_inferred": "split",
+      "fontsize_pt": 72.0,
+      "line_height_px": 100.8,
+      "line_height_pct_of_canvas": 5.25,
+      "margin_v_px": 1020,
+      "margin_l_px": 0,
+      "margin_r_px": 0,
+      "alignment": 8,
+      "caption_bottom_px": 1120.8,
+      "face_top_heuristic_px": 864.0,
+      "top_safe_area_px": 120
+    },
+    "checks": {
+      "size_ok": true,
+      "centering_ok": true,
+      "above_safe_top": true,
+      "face_clear (heuristic)": true,
+      "alignment_top_center": true
+    },
+    "verdict": "PASS",
+    "fail_reasons": []
+  }
+}
