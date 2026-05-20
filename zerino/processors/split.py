@@ -136,17 +136,40 @@ class SplitProcessor(Processor):
                 margin_v=CAPTION_MARGIN_V,
             )
 
+        # Dual-source when a paired face recording is present: compose the
+        # clean game (centred, no bleed) + the clean full webcam (sharp).
+        # Falls back to the single-source crop (FACE_BOX/GAME_BOX from the
+        # one recording) when no face pair — e.g. operator hasn't set up the
+        # Source Record plugin yet, or the pairing found no match.
+        face_path = job.face_source_path
+        dual = face_path is not None and Path(face_path).exists()
+        if dual:
+            self.log.info("split: dual-source (face=%s)", Path(face_path).name)
+
+        def _render(subs: str | None) -> None:
+            if dual:
+                self.generator.run_dual_split_export_from_source(
+                    str(source_path), str(face_path), str(output_path),
+                    job.start, job.end,
+                    canvas_width=CANVAS_WIDTH, canvas_height=CANVAS_HEIGHT,
+                    platform=platform,
+                    subtitles_path=subs,
+                    margin_v_for_subs=CAPTION_MARGIN_V,
+                )
+            else:
+                self.generator.run_split_export_from_source(
+                    str(source_path), str(output_path), job.start, job.end,
+                    face_box=FACE_BOX, game_box=GAME_BOX,
+                    canvas_width=CANVAS_WIDTH, canvas_height=CANVAS_HEIGHT,
+                    platform=platform,
+                    subtitles_path=subs,
+                    margin_v_for_subs=CAPTION_MARGIN_V if subs else None,
+                )
+
         sidecars: dict[str, Path] = {}
         if has_subtitles_filter():
             self.log.info("burning captions into video (libass available)")
-            self.generator.run_split_export_from_source(
-                str(source_path), str(output_path), job.start, job.end,
-                face_box=FACE_BOX, game_box=GAME_BOX,
-                canvas_width=CANVAS_WIDTH, canvas_height=CANVAS_HEIGHT,
-                platform=platform,
-                subtitles_path=str(ass_path),
-                margin_v_for_subs=CAPTION_MARGIN_V,
-            )
+            _render(str(ass_path))
             # Keep .ass sidecar next to the mp4 — see vertical.py for why.
             if owns_ass:
                 sidecars["ass"] = ass_path
@@ -155,12 +178,7 @@ class SplitProcessor(Processor):
                 "libass missing — rendering without burned-in captions; "
                 "ASS sidecar kept. Install an ffmpeg build with libass."
             )
-            self.generator.run_split_export_from_source(
-                str(source_path), str(output_path), job.start, job.end,
-                face_box=FACE_BOX, game_box=GAME_BOX,
-                canvas_width=CANVAS_WIDTH, canvas_height=CANVAS_HEIGHT,
-                platform=platform,
-            )
+            _render(None)
             sidecars["ass"] = ass_path
 
         self.log.info("split render done: clip_id=%s -> %s", job.clip_id, output_path)

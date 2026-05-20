@@ -65,6 +65,15 @@ class ClipJob:
     mode: str = "manual"
     scheduled_for: datetime | None = None
     layout: str | None = None
+    # Clean webcam recording, paired with `source_path` (the clean gameplay
+    # recording) for dual-source split / square clips. None = single-source
+    # clip: the face is cropped from `source_path` (split fallback) or the
+    # whole frame is used (vertical / square / ad-hoc). Set by ClipService
+    # when a face recording is found in recordings/face/ next to the game
+    # recording. Audio + caption transcription always come from
+    # `source_path` (the game recording carries the mic + desktop mix);
+    # this file's own audio is ignored.
+    face_source_path: Path | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

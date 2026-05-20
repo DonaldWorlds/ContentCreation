@@ -93,14 +93,37 @@ class SquareProcessor(Processor):
                 play_res_x=PLAY_RES_X, play_res_y=PLAY_RES_Y,
             )
 
+        # Dual-source when a paired face recording is present: the square
+        # shows a sharp full-face crop of the clean webcam recording, audio
+        # comes from the game recording (the mic + desktop mix). Falls back
+        # to the single-source centre-crop of `source_path` when no face
+        # pair — i.e. a pure talking-head streamer whose one recording IS
+        # the face, or no Source Record file matched.
+        face_path = job.face_source_path
+        dual = face_path is not None and Path(face_path).exists()
+        if dual:
+            self.log.info("square: dual-source (face=%s)", Path(face_path).name)
+
+        def _render(subs: str | None) -> None:
+            if dual:
+                self.generator.run_dual_square_export_from_source(
+                    str(face_path), str(source_path), str(output_path),
+                    job.start, job.end,
+                    canvas=PLAY_RES_X,
+                    platform=platform,
+                    subtitles_path=subs,
+                )
+            else:
+                self.generator.run_export_from_source(
+                    str(source_path), str(output_path), job.start, job.end,
+                    platform=platform, subtitles_path=subs,
+                    layout=LAYOUT_NAME,
+                )
+
         sidecars: dict[str, Path] = {}
         if has_subtitles_filter():
             self.log.info("burning captions into video (libass available)")
-            self.generator.run_export_from_source(
-                str(source_path), str(output_path), job.start, job.end,
-                platform=platform, subtitles_path=str(ass_path),
-                layout=LAYOUT_NAME,
-            )
+            _render(str(ass_path))
             # Keep .ass sidecar next to the mp4 — see vertical.py for why.
             if owns_ass:
                 sidecars["ass"] = ass_path
@@ -109,10 +132,7 @@ class SquareProcessor(Processor):
                 "libass missing — rendering without burned-in captions; "
                 "ASS sidecar kept. Install an ffmpeg build with libass."
             )
-            self.generator.run_export_from_source(
-                str(source_path), str(output_path), job.start, job.end,
-                platform=platform, layout=LAYOUT_NAME,
-            )
+            _render(None)
             sidecars["ass"] = ass_path
 
         self.log.info("square render done: clip_id=%s -> %s", job.clip_id, output_path)
@@ -126,5 +146,6 @@ class SquareProcessor(Processor):
                 "clip_id": job.clip_id,
                 "start": job.start,
                 "end": job.end,
+                "dual_source": dual,
             },
         )

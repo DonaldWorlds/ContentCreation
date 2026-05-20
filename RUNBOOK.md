@@ -81,70 +81,42 @@ If you want to eliminate the first-clip latency entirely, hit one F8 marker earl
    - Hotkey heartbeat logs `marker hotkey pressed (kind=…, press#=N)`. If `press#` stops increasing while you're pressing keys, macOS Accessibility permission was probably revoked — re-grant in System Settings.
 4. **Stop OBS recording.**
 
-### **CRITICAL — OBS scene layout for F9 (split) clips to work**
+### Which recording feeds which clip layout
 
-The split processor crops your OBS recording into fixed quadrants. **If your webcam isn't in the right spot at the right size, the split clip will show the wrong region as your face.** F8 (square) doesn't care — it crops the whole frame. F9 cares a lot.
+| Hotkey | Layout | VIDEO comes from | AUDIO + captions |
+|---|---|---|---|
+| **F8** | square (1:1) | the **face** recording (dual) → sharp face-fill. No face pair → centre-crop of the game recording (fallback). | always the game recording (mic + desktop mix) |
+| **F9** | split (9:16) | **face** recording on top + **game** recording centred on bottom (dual). No face pair → both cropped from the one game recording (fallback). | always the game recording |
 
-**OBS canvas: 1920×1080** (Settings → Video → Base + Output Resolution).
+### **RECOMMENDED — dual-source recording (sharp face + centred game, zero bleed)**
 
-**Webcam — bottom-left quadrant, exactly half-width × half-height:**
+This is how pro clippers get a sharp full face on top and a clean centred game on the bottom with **no facecam bleed**. You record the **webcam and the gameplay as two separate clean files**; the pipeline composites them. With dual-source, **your OBS scene geometry no longer matters for clip quality** — the webcam can sit anywhere in your live scene, because the clip never crops the overlay.
 
-| OBS Transform field | Value |
-|---|---|
-| Position X | `0` |
-| Position Y | `540` |
-| Bounding Box Size | `960 × 540` |
-| Bounding Box Type | "Scale to inner bounds" |
-| Alignment | top-left |
+**One-time OBS setup:**
+1. **Main recording = clean gameplay.** Your normal scene records to `recordings/` as today. It does NOT need the webcam removed — the clip ignores the overlay because the face comes from its own file. (For the absolute cleanest game panel, a scene with game-only is ideal, but not required.)
+2. **Install the Source Record plugin** (Exeldro, free) → restart OBS.
+3. **Add a Source Record filter on your webcam source:**
+   - Right-click the webcam source → **Filters** → `+` → **Source Record**.
+   - **Recording Path:** `<project>/recordings/face/`
+   - **Filename Formatting:** match OBS's main pattern (e.g. `%CCYY-%MM-%DD %hh-%mm-%ss`).
+   - **Record Mode:** **"Recording"** — starts/stops with the main recording, so the two files are time-synced.
+   - **Resolution:** native webcam res (e.g. 1920×1080). Bigger is better; the pipeline downscales it to a sharp top panel.
+4. Each Record press now produces **two** files:
+   - `recordings/<timestamp>.mp4` — gameplay + the audio mix (this is the source of truth for audio + captions)
+   - `recordings/face/<timestamp>.mp4` — webcam only
 
-**Game capture — right half of canvas, full height:**
+The pipeline pairs them automatically by start time (within ±15 s), so the filenames don't have to match exactly. The watchdog only watches `recordings/` (not `recordings/face/`), so the face file never triggers its own clip run.
 
-| OBS Transform field | Value |
-|---|---|
-| Position X | `960` |
-| Position Y | `0` |
-| Bounding Box Size | `960 × 1080` |
+**Verify dual-source is active:** after a recording finishes, the log shows `paired face recording <name> (mtime delta N.Ns)`. If instead you see `no face recording within 15s … — single-source clips`, the pipeline fell back (see below) — check that Source Record wrote a file into `recordings/face/`.
 
-**Layer order in OBS Sources panel** (top of the list = front):
-1. Webcam (on top)
-2. Game Capture (behind)
+### Fallback — single-source split (no Source Record plugin)
 
-**Visual layout of your OBS canvas (1920 × 1080):**
+If there's no paired face file, F9 falls back to cropping both panels out of the **one** game recording, using the crop boxes in [`zerino/processors/split.py`](zerino/processors/split.py):
+- **Face region** (`FACE_BOX`, default `(0, 777, 546, 303)`) → upscaled to the top panel.
+- **Gameplay region** (`GAME_BOX`, default full frame `(0, 0, 1920, 1080)`) → centre cover-cropped to the bottom panel.
 
-```
-┌─────────────────────┬─────────────────────┐
-│                     │                     │
-│  ░░░░░░░░░░░░░░░░░  │                     │
-│  ░ (anything you ░  │                     │
-│  ░  want here —   ░ │     GAME CAPTURE    │
-│  ░ alerts, top    ░ │      960 × 1080     │
-│  ░ banner, etc.)  ░ │      (x=960)        │
-│  ░░░░░░░░░░░░░░░░░  │     this fills      │
-│                     │     the entire      │
-├─────────────────────┤     right half      │
-│                     │                     │
-│      WEBCAM         │                     │
-│     960 × 540       │                     │
-│   (x=0, y=540)      │                     │
-│                     │                     │
-│   YOUR FACE FILLS   │                     │
-│   THIS BOX          │                     │
-└─────────────────────┴─────────────────────┘
-   bottom-left quadrant    right half full-height
-```
+In this mode the webcam **must** sit at the `FACE_BOX` location in your live scene (default: small overlay at bottom-left, x=0 y=777, 546×303), or the top panel shows the wrong region. The known limitation of single-source is that you cannot get sharp-face + centred-game + no-bleed all at once from one overlay recording — that's exactly what dual-source fixes. If your overlay lives elsewhere, edit `FACE_BOX` to match your OBS Transform (Position x,y + box w,h).
 
-**Verify your scene is correct before relying on F9:**
-- Look at your OBS preview. Webcam should be in the bottom-left, taking up exactly one quarter of the canvas.
-- Game capture should fill the right half — visible behind/around the webcam.
-- The top-left quadrant can be anything (alerts, stream label, blank — it gets cropped out of the F9 render).
-
-**What happens when F9 fires:**
-The processor crops two regions out of your 1920×1080 frame:
-- **Face region** (`FACE_BOX = (0, 540, 960, 540)`) → upscaled to fill the top half of the 1080×1920 vertical output.
-- **Gameplay region** (`GAME_BOX = (960, 0, 960, 1080)`) → downscaled to fill the bottom half.
-- Stacked vertically, captions burned just below the seam, watermark sits at the seam.
-
-If your webcam is too small, off-center, or in the wrong quadrant, the face region will show empty space / part of your scene / a partial face. The crop boxes are constants in [`zerino/processors/split.py`](zerino/processors/split.py) — if your OBS scene layout will never match these defaults, change `FACE_BOX` and `GAME_BOX` to match what you've got.
 5. The capture daemon detects the file is stable (10 seconds of unchanged file size — see `STABILITY_POLL_COUNT` in `recording_service.py`) → finishes recording → triggers the clip worker → renders every marker into a clip → queues posts.
 6. **Posting cadence:**
    - Clip #1 → immediate (Zernio publishes on its next pass, ≤ 5 s).
@@ -154,6 +126,7 @@ If your webcam is too small, off-center, or in the wrong quadrant, the face regi
 ### What auto-runs when a recording finishes
 ```
 recording finish detected
+    → pair the game recording with recordings/face/<closest>.mp4 (±15s) — dual-source if found
     → clip windows generated (60s each: 10s before marker, 50s after; clamped at file start)
     → for each marker:
         → Whisper transcribes the audio slice (English forced, VAD on)
@@ -291,12 +264,20 @@ python -m zerino.cli.clip_file --file video.mp4 --start 30 --end 90
 python -m zerino.cli.clip_file --file video.mp4 \
     --platforms tiktok,youtube_shorts \
     --caption "Wait for the end"
+
+# Ad-hoc DUAL-SOURCE test (no capture daemon): pair a game file with a face
+# file and force the layout. Audio + captions still come from --file (game).
+python -m zerino.cli.clip_file --file game.mp4 --face-file face.mp4 \
+    --layout split --start 30 --end 90
+python -m zerino.cli.clip_file --file game.mp4 --face-file face.mp4 \
+    --layout square --start 30 --end 90
 ```
 
 Useful for:
 - Testing pipeline changes without recording in OBS
 - Clipping a downloaded VOD
 - Re-rendering a window from a recording that's already on disk
+- Verifying the dual-source split/square render with two real files
 
 ---
 

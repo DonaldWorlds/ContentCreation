@@ -71,6 +71,19 @@ def main() -> None:
         help="Explicit post caption. Default: random pick from the captions pool.",
     )
     parser.add_argument(
+        "--face-file", default=None,
+        help="Path to a clean webcam recording paired with --file (the game "
+             "recording). Enables ad-hoc dual-source split/square clips "
+             "without the capture daemon. Audio + captions still come from "
+             "--file. Only used by split/square layouts; ignored otherwise.",
+    )
+    parser.add_argument(
+        "--layout", default=None,
+        help="Force the render layout (split / square / vertical) instead of "
+             "honoring each account's layout column. Useful with --face-file "
+             "to exercise the dual-source split or square path directly.",
+    )
+    parser.add_argument(
         "--interval-minutes", type=int, default=120,
         help="Gap between scheduled posts when this expands to many. "
              "Only matters if you batch (single file = single post; ignored).",
@@ -107,16 +120,28 @@ def main() -> None:
 
     platforms = _parse_platforms(args.platforms)
 
+    face_source = None
+    if args.face_file:
+        face_source = Path(args.face_file).expanduser().resolve()
+        if not face_source.is_file():
+            log.error("face file not found: %s", face_source)
+            raise SystemExit(1)
+
+    layout = args.layout.strip().lower() if args.layout else None
+
     job = ClipJob(
         clip_id=None,
         source_path=source,
         start=start,
         end=end,
+        layout=layout,
+        face_source_path=face_source,
     )
 
     log.info(
-        "clip-file: src=%s [%.2fs-%.2fs] (duration=%.2fs) platforms=%s",
+        "clip-file: src=%s [%.2fs-%.2fs] (duration=%.2fs) platforms=%s layout=%s face=%s",
         source.name, start, end, duration, platforms or "(all active)",
+        layout or "(per-account)", face_source.name if face_source else "(none)",
     )
 
     queue_clip_jobs_for_posting(

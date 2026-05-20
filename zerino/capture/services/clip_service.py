@@ -11,6 +11,17 @@ from zerino.publishing.clip_to_posts import queue_clip_jobs_for_posting
 
 log = get_logger("zerino.capture.clip_service")
 
+# Clean-webcam recordings (OBS Source Record plugin) land here, next to the
+# game recordings in RECORDINGS_DIR. The watchdog watches RECORDINGS_DIR
+# non-recursively, so these never trigger their own clip runs — they're
+# only looked up as the pair for a finished game recording.
+FACE_RECORDINGS_DIR = RECORDINGS_DIR / "face"
+
+# A game recording and its face partner are written by the same Record press,
+# but the two outputs can differ by a second or so. Pair by closest mtime
+# within this window; outside it, assume no pair (single-source fallback).
+FACE_PAIR_WINDOW_SEC = 15.0
+
 
 class ClipService:
     # 60 s is the sweet spot across the four target platforms:
@@ -37,6 +48,44 @@ class ClipService:
         self.clip_repo = clip_repo or ClipRepository()
         self.marker_repo = marker_repo or MarkerRepository()
         self.recording_repo = recording_repo or RecordingRepository()
+
+    def _find_face_pair(self, game_path: Path) -> Path | None:
+        """Find the clean-webcam recording paired with `game_path`.
+
+        OBS Source Record writes the webcam to FACE_RECORDINGS_DIR on the
+        same Record press as the main game recording, so the two files start
+        within ~1 s of each other. We pair by closest mtime (robust to
+        whatever filename the plugin emits and to the small start-time skew)
+        within FACE_PAIR_WINDOW_SEC. Returns None if the dir is missing, has
+        no mp4s, or the closest candidate is outside the window — in which
+        case the caller falls back to single-source clips. Defensive: any
+        error returns None (never blocks the clip run).
+        """
+        try:
+            if not FACE_RECORDINGS_DIR.is_dir():
+                return None
+            game_mtime = game_path.stat().st_mtime
+            best: Path | None = None
+            best_delta = FACE_PAIR_WINDOW_SEC
+            for face in FACE_RECORDINGS_DIR.glob("*.mp4"):
+                delta = abs(face.stat().st_mtime - game_mtime)
+                if delta <= best_delta:
+                    best_delta = delta
+                    best = face
+            if best is not None:
+                log.info(
+                    "paired face recording %s (mtime delta %.1fs) with game %s",
+                    best.name, best_delta, game_path.name,
+                )
+            else:
+                log.info(
+                    "no face recording within %.0fs of %s — single-source clips",
+                    FACE_PAIR_WINDOW_SEC, game_path.name,
+                )
+            return best
+        except Exception:
+            log.exception("face-pair lookup failed for %s — single-source fallback", game_path)
+            return None
 
     def process_single_marker(self, marker):
         """Compute the (start, end) clip window for a single marker.
@@ -102,6 +151,11 @@ class ClipService:
             )
             return
 
+        # Resolve the clean-webcam pair once for the whole recording. Split
+        # (F9) and square (F8) jobs use it; vertical ignores it. None when
+        # the operator hasn't set up Source Record (single-source fallback).
+        face_source_path = self._find_face_pair(source_path)
+
         jobs: list[ClipJob] = []
 
         for window in windows:
@@ -138,6 +192,7 @@ class ClipService:
                 start=float(start),
                 end=float(end),
                 layout=layout,
+                face_source_path=face_source_path,
             ))
             log.info(
                 "clip job queued clip_id=%s recording_id=%s start=%.2f end=%.2f kind=%s layout=%s",

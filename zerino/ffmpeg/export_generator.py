@@ -736,6 +736,243 @@ class ExportGenerator:
             raise Exception(result.stderr)
         return str(output_path)
 
+    def run_dual_split_export_from_source(
+        self,
+        game_path,
+        face_path,
+        output_path,
+        start: float,
+        end: float,
+        canvas_width: int = 1080,
+        canvas_height: int = 1920,
+        platform: str = "tiktok",
+        subtitles_path=None,
+        margin_v_for_subs: int | None = None,
+    ):
+        """Two-input face+gameplay split from SEPARATE clean recordings.
+
+        `game_path`: clean full-screen gameplay (no facecam overlay). Crop-
+            free; the WHOLE frame is cover-scaled + centre-cropped to fill
+            the bottom 1080x(H/2) panel — the action stays centred and big,
+            with no facecam to bleed in.
+        `face_path`: clean full webcam. Cover-scaled (DOWNscaled from the
+            cam's native res) to fill the top 1080x(H/2) panel — sharp, no
+            upscale starvation.
+
+        Audio + caption transcription come from the GAME recording
+        (`-map 0:a`); it carries the mic + desktop mix. The face file's own
+        audio is ignored — sidesteps the echo/double-audio problem entirely.
+
+        Both inputs use the same two-stage seek so their slices align
+        frame-for-frame in the vstack; both chains are forced to the game's
+        fps so the vstack inputs match.
+        """
+        game_path = Path(game_path)
+        face_path = Path(face_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not game_path.exists():
+            raise FileNotFoundError(f"Game source not found: {game_path}")
+        if not face_path.exists():
+            raise FileNotFoundError(f"Face source not found: {face_path}")
+        if end <= start:
+            raise ValueError(f"Invalid range: start={start} end={end}")
+        if canvas_height % 2 != 0:
+            raise ValueError(f"canvas_height must be even for vstack, got {canvas_height}")
+
+        duration = end - start
+        pre_roll = min(2.0, start)
+        half_h = canvas_height // 2
+
+        game_meta = probe_metadata(game_path)
+        face_meta = probe_metadata(face_path)
+        game_norm = _video_normalize_prefix(game_meta)
+        face_norm = _video_normalize_prefix(face_meta)
+        # Output fps is driven by the game (the main content). Force BOTH
+        # chains to it so the vstack inputs align frame-for-frame even if
+        # the cam recorded at a different rate.
+        target_fps = _target_fps(game_meta)
+        fps_clause = f",fps={target_fps:g}"
+
+        # Game panel: clean full frame -> cover-scale -> centre crop. No
+        # GAME_BOX needed (the source has no facecam), so we centre on the
+        # whole frame — the crosshair / action lands centred.
+        game_scaler = _pick_scaler(game_meta["width"], game_meta["height"], canvas_width, half_h)
+        game_chain = (
+            f"{game_norm}"
+            f"scale={canvas_width}:{half_h}:flags={game_scaler}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{half_h},"
+            f"setsar=1{fps_clause}"
+        )
+        # Face panel: full webcam -> cover-scale (DOWNscale) -> centre crop.
+        face_scaler = _pick_scaler(face_meta["width"], face_meta["height"], canvas_width, half_h)
+        face_chain = (
+            f"{face_norm}"
+            f"scale={canvas_width}:{half_h}:flags={face_scaler}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{half_h},"
+            f"setsar=1{fps_clause}"
+        )
+
+        graph_parts = [
+            f"[0:v]{game_chain}[game]",
+            f"[1:v]{face_chain}[face]",
+            "[face][game]vstack=inputs=2[stacked]",
+        ]
+        current_label = "stacked"
+
+        # Watermark first, captions on top (same z-order as single-source).
+        wm_pieces = _watermark_graph_pieces("split", canvas_width)
+        if wm_pieces is not None:
+            movie_node, position = wm_pieces
+            graph_parts.append(movie_node)
+            graph_parts.append(f"[{current_label}][wm]overlay={position}[v_wm]")
+            current_label = "v_wm"
+
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            sub = subtitles_filter(
+                Path(subtitles_path),
+                play_res_x=canvas_width, play_res_y=canvas_height,
+            )
+            graph_parts.append(f"[{current_label}]{sub}[v_subs]")
+            current_label = "v_subs"
+
+        video_map = f"[{current_label}]"
+        filter_complex = ";".join(graph_parts)
+        af = self.build_audio_filter(duration)
+
+        command = [
+            "ffmpeg",
+            "-y", "-nostdin",
+            # Input 0 = game (also the audio source). Input 1 = face.
+            # Both get the same input-side seek so they align; the output
+            # -ss/-t below trims the pre-roll off the combined result.
+            "-ss", f"{start - pre_roll:.3f}", "-i", str(game_path),
+            "-ss", f"{start - pre_roll:.3f}", "-i", str(face_path),
+            "-ss", f"{pre_roll:.3f}", "-t", f"{duration:.3f}",
+            "-filter_complex", filter_complex,
+            "-map", video_map,
+            "-map", "0:a",
+            "-af", af,
+            "-c:v", SPLIT_VIDEO_ENCODER,
+            *SPLIT_VIDEO_ENCODER_ARGS,
+            "-maxrate", SPLIT_MAX_BITRATE,
+            "-bufsize", SPLIT_BUFFER_SIZE,
+            "-pix_fmt", PIX_FMT,
+            *COLOR_TAG_ARGS,
+            "-c:a", AUDIO_ENCODER,
+            *AUDIO_ENCODER_ARGS,
+            "-ar", AUDIO_SAMPLE_RATE,
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            raise Exception(result.stderr)
+        return str(output_path)
+
+    def run_dual_square_export_from_source(
+        self,
+        face_path,
+        audio_path,
+        output_path,
+        start: float,
+        end: float,
+        canvas: int = 1080,
+        platform: str = "tiktok",
+        subtitles_path=None,
+    ):
+        """Square (1:1) face-only clip: VIDEO from the clean webcam recording,
+        AUDIO from the game recording (the mic + desktop mix). Used for F8 /
+        talking_head markers when a paired face recording exists, so the
+        square shows a sharp full-face crop instead of a centre-crop of the
+        gameplay (the live-test failure where F8 grabbed the game launcher).
+
+        `face_path`: clean webcam → cover-scaled + centre-cropped to canvas×canvas.
+        `audio_path`: game recording → `-map 1:a` (its own audio is the mix).
+        Captions transcribed upstream from the game recording; the .ass is
+        burned here.
+        """
+        face_path = Path(face_path)
+        audio_path = Path(audio_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not face_path.exists():
+            raise FileNotFoundError(f"Face source not found: {face_path}")
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Audio source not found: {audio_path}")
+        if end <= start:
+            raise ValueError(f"Invalid range: start={start} end={end}")
+
+        duration = end - start
+        pre_roll = min(2.0, start)
+
+        face_meta = probe_metadata(face_path)
+        face_norm = _video_normalize_prefix(face_meta)
+        target_fps = _target_fps(face_meta)
+        fps_clause = _fps_filter(face_meta, target_fps)
+        scaler = _pick_scaler(face_meta["width"], face_meta["height"], canvas, canvas)
+
+        # Face video filtered to a centred square crop.
+        base_chain = (
+            f"{face_norm}"
+            f"scale={canvas}:{canvas}:flags={scaler}:force_original_aspect_ratio=increase,"
+            f"crop={canvas}:{canvas},"
+            f"setsar=1{fps_clause}"
+        )
+        graph_parts = [f"[0:v]{base_chain}[base]"]
+        current_label = "base"
+
+        wm_pieces = _watermark_graph_pieces("square", canvas)
+        if wm_pieces is not None:
+            movie_node, position = wm_pieces
+            graph_parts.append(movie_node)
+            graph_parts.append(f"[{current_label}][wm]overlay={position}[v_wm]")
+            current_label = "v_wm"
+
+        if subtitles_path is not None:
+            from zerino.processors._captions import subtitles_filter
+            sub = subtitles_filter(Path(subtitles_path), play_res_x=canvas, play_res_y=canvas)
+            graph_parts.append(f"[{current_label}]{sub}[v_subs]")
+            current_label = "v_subs"
+
+        video_map = f"[{current_label}]"
+        filter_complex = ";".join(graph_parts)
+        af = self.build_audio_filter(duration)
+
+        command = [
+            "ffmpeg",
+            "-y", "-nostdin",
+            "-ss", f"{start - pre_roll:.3f}", "-i", str(face_path),
+            "-ss", f"{start - pre_roll:.3f}", "-i", str(audio_path),
+            "-ss", f"{pre_roll:.3f}", "-t", f"{duration:.3f}",
+            "-filter_complex", filter_complex,
+            "-map", video_map,
+            "-map", "1:a",
+            "-af", af,
+            "-c:v", VIDEO_ENCODER,
+            *VIDEO_ENCODER_ARGS,
+            "-maxrate", MAX_BITRATE,
+            "-bufsize", BUFFER_SIZE,
+            "-pix_fmt", PIX_FMT,
+            *COLOR_TAG_ARGS,
+            "-c:a", AUDIO_ENCODER,
+            *AUDIO_ENCODER_ARGS,
+            "-ar", AUDIO_SAMPLE_RATE,
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            raise Exception(result.stderr)
+        return str(output_path)
+
     def run_export(self, input_path, output_path, platform="tiktok", style="talking_head", subtitles_path=None):
         input_path = Path(input_path)
         output_path = Path(output_path)

@@ -42,3 +42,6 @@ caption_tests/
 
 # Quality verifier output — keyframe PNGs + spectrograms per inspected clip
 quality_report/
+
+# Synthetic dual-source verification output (frames from verify_dual_source.py)
+verify_dual/
