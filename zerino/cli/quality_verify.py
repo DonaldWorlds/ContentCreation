@@ -199,10 +199,20 @@ def _loudness(input_path: Path) -> dict:
 BPP_STARVED = 0.04
 BPP_GENEROUS = 0.20
 
-# signalstats luma is full 0-255 on the decoded frame. Crushed blacks /
-# blown highlights thresholds (decoded values, not tv-range coded values).
-LUMA_CRUSH_BELOW = 12     # avg YMIN below this -> shadow detail clipped to black
-LUMA_CLIP_ABOVE = 245     # avg YMAX above this -> highlight detail clipped to white
+# signalstats reports the RAW decoded Y values — it does NOT expand a
+# limited/tv-range stream to 0-255. So the crush/clip thresholds must be
+# chosen relative to the stream's declared color_range, or they mis-fire:
+#   - tv (limited): legal black=16, white=235. "Crushed" means blacks pushed
+#     BELOW the legal floor (what an eq gamma/contrast bump does); "clipped"
+#     means whites pushed ABOVE legal white. Our renders are tv-range.
+#   - pc/full: legal 0-255, so only the extremes (near 0 / near 255) are a
+#     real problem — a full-range source legitimately reaches 0 and 255.
+# Returns (crush_below, clip_above) for the given color_range.
+def _luma_thresholds(color_range: str | None) -> tuple[float, float]:
+    if (color_range or "").lower() in ("pc", "full", "jpeg"):
+        return (3.0, 252.0)
+    # tv / limited / unknown (our pipeline tags tv) -> legal-range edges + margin
+    return (14.0, 237.0)
 
 # Chroma neutral is 128. A consistent push of V up (red) and U down (blue)
 # is the "orange skin" cast the user complained about. Flag when the warm
@@ -493,15 +503,16 @@ def _analyze_encoding(input_path: Path, probe: dict, work_dir: Path) -> dict:
 
     ymin, ymax = levels.get("YMIN"), levels.get("YMAX")
     uavg, vavg, sat = levels.get("UAVG"), levels.get("VAVG"), levels.get("SATAVG")
-    if ymin is not None and ymin < LUMA_CRUSH_BELOW:
+    crush_below, clip_above = _luma_thresholds(video.get("color_range"))
+    if ymin is not None and ymin < crush_below:
         flags.append(
-            f"SHADOWS CRUSHED: avg YMIN={ymin} (< {LUMA_CRUSH_BELOW}). Shadow "
-            "detail clipped to black — a gamma/contrast bump on already-dark source."
+            f"SHADOWS CRUSHED: avg YMIN={ymin} (< {crush_below}, range={video.get('color_range') or 'tv?'}). "
+            "Blacks pushed below the legal floor — a gamma/contrast bump on already-dark source."
         )
-    if ymax is not None and ymax > LUMA_CLIP_ABOVE:
+    if ymax is not None and ymax > clip_above:
         flags.append(
-            f"HIGHLIGHTS CLIPPED: avg YMAX={ymax} (> {LUMA_CLIP_ABOVE}). Highlight "
-            "detail blown to white."
+            f"HIGHLIGHTS CLIPPED: avg YMAX={ymax} (> {clip_above}, range={video.get('color_range') or 'tv?'}). "
+            "Whites pushed above the legal ceiling — highlight detail blown out."
         )
     if uavg is not None and vavg is not None:
         warm = (vavg - 128) + (128 - uavg)  # red up + blue down = warm/orange
@@ -545,6 +556,8 @@ def _analyze_encoding(input_path: Path, probe: dict, work_dir: Path) -> dict:
             "y_min_avg": ymin, "y_max_avg": ymax, "y_avg": levels.get("YAVG"),
             "u_avg": uavg, "v_avg": vavg, "sat_avg": sat,
             "temporal_diff_avg": levels.get("YDIF"),
+            "color_range": video.get("color_range"),
+            "crush_below": crush_below, "clip_above": clip_above,
         },
         "edge_energy": {"sobel_y_avg": sobel},
         "flags": flags,
@@ -941,8 +954,9 @@ def _encoding_markdown(enc: dict) -> list[str]:
         "",
         "### Levels & color (signalstats, clip average)",
         "",
-        f"- **Luma:** YMIN={lc.get('y_min_avg')} (crush < {LUMA_CRUSH_BELOW}), "
-        f"YAVG={lc.get('y_avg')}, YMAX={lc.get('y_max_avg')} (clip > {LUMA_CLIP_ABOVE})",
+        f"- **Luma** (range={lc.get('color_range') or 'tv?'}): "
+        f"YMIN={lc.get('y_min_avg')} (crush < {lc.get('crush_below')}), "
+        f"YAVG={lc.get('y_avg')}, YMAX={lc.get('y_max_avg')} (clip > {lc.get('clip_above')})",
         f"- **Chroma:** UAVG={lc.get('u_avg')}, VAVG={lc.get('v_avg')}  "
         f"(neutral=128; V up + U down = warm/orange)",
         f"- **Saturation:** SATAVG={lc.get('sat_avg')}  (high > {SAT_HIGH_WARN} = over-processed)",

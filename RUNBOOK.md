@@ -329,7 +329,7 @@ python -m zerino.cli.cleanup renders --days 14
 ### Captions appear in the wrong language
 - The Whisper pipeline forces English. If you're getting non-English, Whisper landed on a different language *despite* the force (rare, but happens on heavily-music-bedded content).
 - Check `logs/zerino.log` for `whisper detected lang=XX ... but we forced en — dropping segments`. That's the safety net firing — clip gets no captions instead of foreign-script captions.
-- If the language guard fires on every clip, the source audio is too noisy / music-heavy for Whisper at the `small` model size. Bump up to `medium` (one-line change in `_captions.py`).
+- The transcriber runs the Whisper `medium` model (set in `_captions.py`). The first clip after a fresh install downloads it (~1.5 GB) — that one clip is slow; the rest are fast.
 
 ### Captions overlap the speaker's face
 - Run `quality_verify` on the render. The Captions section reports geometry pass/fail with the exact pixel reasoning.
@@ -341,9 +341,16 @@ python -m zerino.cli.cleanup renders --days 14
 - Constant to adjust: `SPEECH_LEVELER` in `zerino/ffmpeg/export_generator.py`. Increase `dynaudnorm p=` (currently 0.95) for louder, but don't exceed 1.0.
 
 ### Render took forever / hung
-- libx264 -slow on a 60s clip takes ~10-15 s on Apple Silicon. Longer if the source is 4K.
-- If you have an NVIDIA GPU on Windows, NVENC is automatically used and renders are ~3-5x faster.
+- libx264 -slow on a 60s clip takes ~10-15 s on Apple Silicon, longer on an older CPU or a 4K source. This is the default on every machine (see "Clips look softer on Windows" below for why).
 - If a render genuinely hangs (no progress in 60 s), kill the ffmpeg process and check `logs/zerino.log` for the actual command line — copy/paste it into a terminal to see ffmpeg's stderr directly.
+
+### Clips look softer / blockier on Windows than on the Mac
+- **Cause (fixed):** the pipeline used to auto-pick the GPU encoder (`h264_nvenc`) whenever an NVIDIA card was present. On an older GPU (e.g. GTX 1050 Ti / Pascal) NVENC is single-pass and noticeably softer than libx264, so Windows clips looked worse than the Mac's libx264 ones.
+- **Now:** every machine uses **libx264 by default**, so Mac and Windows produce identical quality. The startup log prints `video encoder selected: libx264 (...)` — confirm it says libx264.
+- **Only if you have a newer NVIDIA GPU (RTX 20-series / Turing or later) and want faster renders**, opt into the GPU encoder by setting an environment variable before launching the daemons:
+  - Windows PowerShell: `$env:ZERINO_VIDEO_ENCODER="auto"` (uses NVENC if present, else libx264), or `="nvenc"` to force it.
+  - macOS / Linux: `export ZERINO_VIDEO_ENCODER=auto`
+  - Leave it unset (or `=libx264`) for best quality. Split (F9) clips always use libx264 regardless.
 
 ### A post was queued but never showed up on Zernio
 - Check `logs/zerino.log` for `pipeline: queued post id=N` and then `dispatch: post id=N platform=…` follow-ups.

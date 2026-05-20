@@ -163,14 +163,25 @@ SPLIT_VIDEO_ENCODER_ARGS = [
 
 # --- Encoder detection (S6.3, S6.6) ----------------------------------------- #
 # Probe ffmpeg's built-in encoder lists at import time and cache.
-# Video encoder priority (after S6.6):
-#   1. h264_nvenc (Windows / Linux w/ NVIDIA GPU) — genuinely faster than
-#      libx264 -slow at comparable quality.
-#   2. libx264 (always) — CPU fallback. On Apple Silicon this runs at
-#      4-6x realtime for 60s 1080p clips; the speed-vs-quality trade for
-#      VideoToolbox doesn't hold up (VideoToolbox at 12M maxrate produced
-#      visible banding on dark gradients + smearing on skin, per testing).
-# VideoToolbox is intentionally NOT in the priority chain — kept off entirely.
+# Video encoder policy (revised after the Mac-vs-Windows quality finding):
+#   DEFAULT = libx264 EVERYWHERE. libx264 -preset slow -crf 18 is the quality
+#   reference and, crucially, it's IDENTICAL on Mac and Windows — so a clip
+#   doesn't look better just because it was rendered on the Mac. 60s 1080p
+#   clips encode in seconds-to-low-minutes on any modern CPU; that's an
+#   acceptable cost for consistent quality.
+#
+#   Why NOT auto-pick NVENC: on an older NVIDIA GPU (e.g. Pascal / GTX 1050 Ti)
+#   h264_nvenc is single-pass and noticeably softer/blockier than libx264 at
+#   the same bitrate, AND the `-multipass fullres` quality flag is Turing+
+#   (RTX 20-series) only — on Pascal it errors or is ignored. Auto-picking it
+#   silently degraded every square/vertical clip on the Windows box. So NVENC
+#   is now OPT-IN only.
+#
+#   To opt in (only worth it on a Turing+ GPU where you want speed over the
+#   last ~1 dB of quality): set ZERINO_VIDEO_ENCODER=nvenc (force) or =auto
+#   (nvenc if present, else libx264). Anything else / unset = libx264.
+#   VideoToolbox is intentionally never used (banding on dark gradients).
+VIDEO_ENCODER_PREF = os.getenv("ZERINO_VIDEO_ENCODER", "libx264").strip().lower()
 #
 # Audio encoder priority (S6.3):
 #   1. aac_at (macOS only — Apple AudioToolbox) — materially cleaner on
@@ -203,28 +214,40 @@ def _probe_available_encoders() -> set[str]:
 _AVAILABLE_ENCODERS = _probe_available_encoders()
 
 
+def _libx264_encoder() -> tuple[str, list[str]]:
+    return ("libx264", [
+        "-preset", ENCODE_PRESET,
+        "-crf", LIBX264_CRF,
+    ])
+
+
 def _pick_video_encoder() -> tuple[str, list[str]]:
-    """Return (encoder_name, args). NVENC first (Windows / Linux NVIDIA),
-    libx264 otherwise. VideoToolbox intentionally skipped — see S6.6.
+    """Return (encoder_name, args). libx264 by default (consistent quality on
+    Mac AND Windows); NVENC only when explicitly opted in via
+    ZERINO_VIDEO_ENCODER=nvenc|auto and actually available.
+
+    NVENC args deliberately OMIT `-multipass fullres` (Turing+ only) so the
+    opt-in path doesn't error on older GPUs; `-spatial-aq` is supported back
+    to Pascal. On a Turing+ card you trade ~1 dB for speed.
     """
-    if "h264_nvenc" in _AVAILABLE_ENCODERS:
-        # NVENC CQ mode: -rc vbr enables variable bitrate WITH a quality
-        # target (-cq), then -maxrate / -bufsize cap the upper bound.
-        # multipass=fullres gives an extra ~1 dB of quality at minor speed
-        # cost; spatial-aq distributes bits within frames for skin/eyes.
+    want_nvenc = (
+        VIDEO_ENCODER_PREF in ("nvenc", "h264_nvenc", "auto")
+        and "h264_nvenc" in _AVAILABLE_ENCODERS
+    )
+    if want_nvenc:
         return ("h264_nvenc", [
             "-preset", "p5",
             "-tune", "hq",
             "-rc", "vbr",
             "-cq", NVENC_CQ,
-            "-multipass", "fullres",
             "-spatial-aq", "1",
         ])
-    # CPU fallback — libx264 ships with every reasonable ffmpeg build.
-    return ("libx264", [
-        "-preset", ENCODE_PRESET,
-        "-crf", LIBX264_CRF,
-    ])
+    if VIDEO_ENCODER_PREF in ("nvenc", "h264_nvenc") and "h264_nvenc" not in _AVAILABLE_ENCODERS:
+        _log.warning(
+            "ZERINO_VIDEO_ENCODER=nvenc requested but h264_nvenc not available "
+            "in this ffmpeg build — falling back to libx264."
+        )
+    return _libx264_encoder()
 
 
 def _pick_audio_encoder() -> tuple[str, list[str]]:
@@ -248,7 +271,10 @@ def _pick_audio_encoder() -> tuple[str, list[str]]:
 
 VIDEO_ENCODER, VIDEO_ENCODER_ARGS = _pick_video_encoder()
 AUDIO_ENCODER, AUDIO_ENCODER_ARGS = _pick_audio_encoder()
-_log.info("video encoder selected: %s", VIDEO_ENCODER)
+_log.info(
+    "video encoder selected: %s (ZERINO_VIDEO_ENCODER=%s; split always libx264)",
+    VIDEO_ENCODER, VIDEO_ENCODER_PREF,
+)
 _log.info("audio encoder selected: %s", AUDIO_ENCODER)
 
 

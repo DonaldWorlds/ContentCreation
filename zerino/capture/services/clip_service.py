@@ -54,34 +54,49 @@ class ClipService:
 
         OBS Source Record writes the webcam to FACE_RECORDINGS_DIR on the
         same Record press as the main game recording, so the two files start
-        within ~1 s of each other. We pair by closest mtime (robust to
-        whatever filename the plugin emits and to the small start-time skew)
+        AND finish within ~1 s of each other. We pair by closest mtime
+        (robust to whatever filename the plugin emits and to the small skew)
         within FACE_PAIR_WINDOW_SEC. Returns None if the dir is missing, has
         no mp4s, or the closest candidate is outside the window — in which
         case the caller falls back to single-source clips. Defensive: any
         error returns None (never blocks the clip run).
+
+        Stale-file caution: pairing is purely time-based, so a leftover face
+        file from a PRIOR session whose mtime happens to land inside the
+        window could mis-pair. To make that visible we log a WARN listing
+        every candidate inside the window when there's more than one — if a
+        clip's face looks wrong, that log line is the first place to check.
+        Best practice is to clear recordings/face/ between sessions.
         """
         try:
             if not FACE_RECORDINGS_DIR.is_dir():
                 return None
             game_mtime = game_path.stat().st_mtime
-            best: Path | None = None
-            best_delta = FACE_PAIR_WINDOW_SEC
+            in_window: list[tuple[float, Path]] = []
             for face in FACE_RECORDINGS_DIR.glob("*.mp4"):
                 delta = abs(face.stat().st_mtime - game_mtime)
-                if delta <= best_delta:
-                    best_delta = delta
-                    best = face
-            if best is not None:
-                log.info(
-                    "paired face recording %s (mtime delta %.1fs) with game %s",
-                    best.name, best_delta, game_path.name,
-                )
-            else:
+                if delta <= FACE_PAIR_WINDOW_SEC:
+                    in_window.append((delta, face))
+            if not in_window:
                 log.info(
                     "no face recording within %.0fs of %s — single-source clips",
                     FACE_PAIR_WINDOW_SEC, game_path.name,
                 )
+                return None
+            in_window.sort(key=lambda t: t[0])
+            best_delta, best = in_window[0]
+            if len(in_window) > 1:
+                others = ", ".join(f"{f.name}(+{d:.1f}s)" for d, f in in_window)
+                log.warning(
+                    "multiple face recordings within %.0fs of %s — picking closest "
+                    "(%s). Candidates: %s. Clear recordings/face/ between sessions "
+                    "to avoid mis-pairing a stale file.",
+                    FACE_PAIR_WINDOW_SEC, game_path.name, best.name, others,
+                )
+            log.info(
+                "paired face recording %s (mtime delta %.1fs) with game %s",
+                best.name, best_delta, game_path.name,
+            )
             return best
         except Exception:
             log.exception("face-pair lookup failed for %s — single-source fallback", game_path)
