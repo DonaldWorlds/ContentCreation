@@ -45,23 +45,24 @@ CANVAS_HEIGHT = 1920
 HALF_HEIGHT = CANVAS_HEIGHT // 2  # 960
 
 # Source crop boxes — (x, y, w, h) on the original 1920x1080 recording.
+# THESE MUST MATCH THE OPERATOR'S OBS SCENE. If you move/resize the webcam
+# or the game capture in OBS, update these to the exact OBS Edit Transform
+# Position (x, y) + Bounding Box Size (w, h) values, or the split clip
+# crops the wrong region.
 #
-# FACE_BOX is the bottom-LEFT QUADRANT of the canvas (960x540 = half-width,
-# half-height). Previously sized 480x270, which gave the face only ~130k
-# source pixels to upscale into a 1080x960 panel — a 3.5x linear upscale
-# that produced "1995 webcam" quality. Quadrupling the source region to
-# 960x540 = 518k source pixels and only 1.8x linear upscale = visibly
-# sharper output, especially after the hqdn3d denoise + libx264 + tune
-# film + AQ tuning landed alongside this coord change.
+# Current values match the operator's live OBS scene:
+#   Webcam:       Position X=0, Y=777, Bounding Box 546 x 303 (small
+#                 bottom-left overlay; rest of canvas is full-screen game).
+#   Game capture: full-screen behind the webcam; we crop the right half
+#                 (960..1920) which the bottom-left cam never covers.
 #
-# GAME_BOX is now the right HALF of the canvas (960x1080), since the
-# facecam takes up the bottom-left quadrant. Gameplay must be visible in
-# this region in your OBS scene (Game Capture set to fill the canvas
-# behind the webcam works fine — the webcam just sits on top).
-#
-# To match these constants, in OBS Edit Transform for your webcam:
-#   Position X = 0, Position Y = 540, Bounding Box Size = 960 x 540
-FACE_BOX = (0, 540, 960, 540)
+# QUALITY NOTE: the face region is upscaled to fill the 1080x960 top panel.
+# 546x303 (~165k source px) is a ~3.2x linear upscale -> SOFT face (the
+# original code called a similar 480x270 box "1995 webcam quality"). If the
+# face looks too soft in the render, enlarge the OBS webcam box and bump
+# these numbers (e.g. 960x540 = ~1.8x upscale = visibly sharper). Tradeoff:
+# a bigger webcam box covers more gameplay in the live stream.
+FACE_BOX = (0, 777, 546, 303)
 GAME_BOX = (960, 0, 960, 1080)
 
 # Captions just below the seam (y=960) — over the top of the gameplay half
