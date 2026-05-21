@@ -15,7 +15,7 @@ from zerino.config import DB_PATH, get_logger
 from zerino.db.repositories.accounts_repository import get_accounts_for_platform
 from zerino.db.repositories.posts_repository import (
     create_post,
-    mark_published,
+    mark_published_durably,
     record_failure,
 )
 from zerino.models import ClipJob
@@ -183,8 +183,14 @@ def dispatch_post_ids(post_ids: list[int]) -> None:
     if not post_ids:
         return
 
-    conn = sqlite3.connect(DB_PATH)
+    # timeout=30 -> busy_timeout, WAL -> concurrent-writer friendly. Same
+    # rationale as posts_repository._connect: the scheduler daemon writes this
+    # DB too, and a lock here used to surface as a post-send failure -> retry
+    # -> duplicate.
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
 
     try:
         for pid in post_ids:
@@ -218,17 +224,33 @@ def dispatch_post_ids(post_ids: list[int]) -> None:
 
             row = dict(row)
 
+            # The Zernio send is the COMMIT POINT. Split the two failure zones:
+            #   - dispatch_post RAISES  -> the post was NOT created (or the send
+            #     itself failed); safe to retry.
+            #   - dispatch_post RETURNS -> the post EXISTS on Zernio; we must
+            #     never re-dispatch. Record success via the durable local write
+            #     (retries the DB only). If even that fails, leave the row
+            #     'processing' for the stale-claim sweep — NOT 'pending', which
+            #     the scheduler would re-send and duplicate.
             try:
                 zernio_id = dispatch_post(row)
-                mark_published(pid, zernio_id)
+            except Exception as e:  # noqa: BLE001
+                log.exception("dispatch: post id=%d send failed (will retry): %s", pid, e)
+                retry_at = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+                record_failure(pid, str(e), retry_at=retry_at)
+                continue
+
+            if mark_published_durably(pid, zernio_id):
                 log.info(
                     "dispatch: post id=%d platform=%s zernio_post_id=%s",
                     pid, row["platform"], zernio_id,
                 )
-            except Exception as e:  # noqa: BLE001
-                log.exception("dispatch: post id=%d failed: %s", pid, e)
-                # Schedule a 60 s retry — the scheduler daemon will pick it up
-                retry_at = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
-                record_failure(pid, str(e), retry_at=retry_at)
+            else:
+                log.critical(
+                    "dispatch: post id=%d was SENT to Zernio (zernio_post_id=%s) but the "
+                    "local publish-write failed; leaving it 'processing' for the stale-claim "
+                    "sweep. It will NOT be re-sent. Reconcile against the Zernio dashboard.",
+                    pid, zernio_id,
+                )
     finally:
         conn.close()

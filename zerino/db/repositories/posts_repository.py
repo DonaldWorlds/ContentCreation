@@ -18,9 +18,18 @@ STALE_CLAIM_TIMEOUT_SECONDS = 120
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    # timeout=30 sets SQLite's busy_timeout to 30s so a write that hits a
+    # transient lock WAITS instead of raising "database is locked" immediately
+    # (the capture process and the scheduler daemon both write this DB). WAL
+    # mode lets readers and a single writer proceed concurrently and is a
+    # DB-level setting that persists once applied. Together they remove the
+    # lock errors that were causing a SENT post to be recorded as failed ->
+    # retried -> double-posted.
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
@@ -148,6 +157,30 @@ def mark_published(post_id: int, zernio_post_id: str) -> None:
                WHERE id=?""",
             (zernio_post_id, _now(), post_id),
         )
+
+
+def mark_published_durably(post_id: int, zernio_post_id: str, *, retries: int = 5) -> bool:
+    """Record a SENT post as published, retrying ONLY the local DB write.
+
+    The post already exists on Zernio by the time this is called, so this must
+    NEVER trigger a re-dispatch. It retries the (idempotent) local UPDATE a few
+    times to ride out a transient lock, and returns True on success / False if
+    it still couldn't write. On False the caller leaves the row 'processing'
+    (the stale-claim sweep surfaces it as 'failed' for manual reconciliation) —
+    it does NOT re-send, which would duplicate.
+    """
+    import time as _time
+
+    last: Exception | None = None
+    for i in range(retries):
+        try:
+            mark_published(post_id, zernio_post_id)
+            return True
+        except Exception as e:  # noqa: BLE001
+            last = e
+            _time.sleep(0.3 * (i + 1))
+    # Couldn't record locally; the post is still live on Zernio.
+    return False
 
 
 def record_failure(post_id: int, error: str, retry_at: str | None) -> None:

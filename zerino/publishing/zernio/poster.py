@@ -113,9 +113,20 @@ def dispatch_post(post_row: dict[str, Any]) -> str:
     }
 
     result = create_or_schedule_post(payload)
+
+    # COMMIT POINT. The post now EXISTS on Zernio. The Zernio API has no
+    # idempotency key, so a re-send = a duplicate post. Therefore nothing past
+    # this line may raise: a raise makes the caller treat the post as "not
+    # sent" and retry, which double-posts. If we can't parse the returned id,
+    # log loudly and return a sentinel — the post is still sent.
     post_id = _extract_post_id(result)
     if not post_id:
-        raise RuntimeError(f"Zernio returned no post id. result={result!r}")
+        log.error(
+            "poster: Zernio create SUCCEEDED but no post id could be parsed "
+            "(post IS created on Zernio — do NOT retry/re-send). result=%r",
+            result,
+        )
+        return "UNKNOWN"
 
     log.info("poster: created zernio_post_id=%s platform=%s", post_id, zernio_platform)
     return post_id

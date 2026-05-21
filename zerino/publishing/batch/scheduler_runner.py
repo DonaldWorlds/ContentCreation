@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from zerino.config import DB_PATH, get_logger
 from zerino.db.repositories.posts_repository import (
     claim_due_posts,
-    mark_published,
+    mark_published_durably,
     record_failure,
     recover_stale_claims,
 )
@@ -132,37 +132,47 @@ def run_scheduler_loop(
                 log.debug("rate-limit: waiting %.1fs before next %s post", wait, platform)
                 time.sleep(wait)
 
+            # COMMIT POINT (same contract as pipeline.dispatch_post_ids):
+            #   dispatch_post RAISES  -> not sent; retry with backoff.
+            #   dispatch_post RETURNS -> sent; never re-dispatch. Record via the
+            #   durable local write; if that fails, leave 'processing' for the
+            #   stale-claim sweep rather than re-sending (which would duplicate).
             try:
                 zernio_post_id = dispatch_post(row)
-                mark_published(post_id, zernio_post_id)
-                _platform_last_sent[platform] = time.monotonic()
-                log.info(
-                    "published post id=%d platform=%s zernio_post_id=%s",
-                    post_id, platform, zernio_post_id,
-                )
-
             except Exception as e:
                 new_attempts = attempts + 1
                 log.exception(
-                    "post id=%d failed (attempt %d/%d): %s",
+                    "post id=%d send failed (attempt %d/%d): %s",
                     post_id, new_attempts, max_attempts, e,
                 )
-
                 if new_attempts >= max_attempts:
-                    # permanent failure — no more retries
                     record_failure(post_id, str(e), retry_at=None)
                     log.warning(
                         "post id=%d permanently failed after %d attempts",
                         post_id, new_attempts,
                     )
                 else:
-                    # Phase 3: schedule retry with exponential backoff
                     retry_at = _next_retry_at(new_attempts)
                     record_failure(post_id, str(e), retry_at=retry_at)
                     log.info(
                         "post id=%d will retry at %s (attempt %d/%d)",
                         post_id, retry_at, new_attempts, max_attempts,
                     )
+                continue
+
+            _platform_last_sent[platform] = time.monotonic()
+            if mark_published_durably(post_id, zernio_post_id):
+                log.info(
+                    "published post id=%d platform=%s zernio_post_id=%s",
+                    post_id, platform, zernio_post_id,
+                )
+            else:
+                log.critical(
+                    "post id=%d was SENT to Zernio (zernio_post_id=%s) but the local "
+                    "publish-write failed; leaving 'processing' for the stale-claim sweep. "
+                    "It will NOT be re-sent. Reconcile against the Zernio dashboard.",
+                    post_id, zernio_post_id,
+                )
 
         # small yield so we don't spin immediately when many jobs are due
         time.sleep(0.1)
