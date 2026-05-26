@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from zerino.config import RECORDINGS_DIR, get_logger
+from zerino.ffmpeg.ffmpeg_utils import has_video_stream
 from zerino.db.repositories.clip_repository import ClipRepository
 from zerino.db.repositories.marker_repository import MarkerRepository
 from zerino.db.repositories.recording_repository import RecordingRepository
@@ -52,52 +53,73 @@ class ClipService:
     def _find_face_pair(self, game_path: Path) -> Path | None:
         """Find the clean-webcam recording paired with `game_path`.
 
-        OBS Source Record writes the webcam to FACE_RECORDINGS_DIR on the
-        same Record press as the main game recording, so the two files start
-        AND finish within ~1 s of each other. We pair by closest mtime
-        (robust to whatever filename the plugin emits and to the small skew)
-        within FACE_PAIR_WINDOW_SEC. Returns None if the dir is missing, has
-        no mp4s, or the closest candidate is outside the window — in which
-        case the caller falls back to single-source clips. Defensive: any
-        error returns None (never blocks the clip run).
+        OBS writes the main recording and its Source Record webcam file with
+        the SAME start-timestamp name — game "2026-05-26 00-18-20.mkv" pairs
+        with face "2026-05-26 00-18-20.mp4". That shared start timestamp is
+        the reliable pair key, so we match by FILENAME first and validate the
+        match actually contains video.
 
-        Stale-file caution: pairing is purely time-based, so a leftover face
-        file from a PRIOR session whose mtime happens to land inside the
-        window could mis-pair. To make that visible we log a WARN listing
-        every candidate inside the window when there's more than one — if a
-        clip's face looks wrong, that log line is the first place to check.
-        Best practice is to clear recordings/face/ between sessions.
+        Only if no valid name match exists do we fall back to closest-mtime
+        pairing. mtime is the file's FINISH time, so a spurious/empty webcam
+        file created at stream-end (camera dropped and OBS rolled a new file)
+        can sit closer in mtime than the real webcam file and get mis-picked —
+        the exact failure that put a corrupt face on a whole batch. Every
+        candidate is validated with has_video_stream(); files with no real
+        video are skipped. Returns None (single-source fallback) if nothing
+        valid pairs. Defensive: any error returns None (never blocks the run).
         """
         try:
             if not FACE_RECORDINGS_DIR.is_dir():
                 return None
-            game_mtime = game_path.stat().st_mtime
-            in_window: list[tuple[float, Path]] = []
-            for face in FACE_RECORDINGS_DIR.glob("*.mp4"):
-                delta = abs(face.stat().st_mtime - game_mtime)
-                if delta <= FACE_PAIR_WINDOW_SEC:
-                    in_window.append((delta, face))
-            if not in_window:
-                log.info(
-                    "no face recording within %.0fs of %s — single-source clips",
-                    FACE_PAIR_WINDOW_SEC, game_path.name,
-                )
+            candidates = sorted(FACE_RECORDINGS_DIR.glob("*.mp4"))
+            if not candidates:
                 return None
-            in_window.sort(key=lambda t: t[0])
-            best_delta, best = in_window[0]
-            if len(in_window) > 1:
-                others = ", ".join(f"{f.name}(+{d:.1f}s)" for d, f in in_window)
+
+            stem = game_path.stem  # OBS start-timestamp, e.g. "2026-05-26 00-18-20"
+
+            # 1) NAME match — the webcam file carrying the game recording's
+            #    start timestamp. Correct even when a later, empty file has a
+            #    closer mtime. Substring match tolerates any suffix OBS appends.
+            named = [f for f in candidates if stem and stem in f.stem]
+            for f in named:
+                if has_video_stream(f):
+                    log.info("paired face by NAME %s with game %s", f.name, game_path.name)
+                    return f
                 log.warning(
-                    "multiple face recordings within %.0fs of %s — picking closest "
-                    "(%s). Candidates: %s. Clear recordings/face/ between sessions "
-                    "to avoid mis-pairing a stale file.",
-                    FACE_PAIR_WINDOW_SEC, game_path.name, best.name, others,
+                    "name-matched face %s has NO video stream (camera/capture dropped) — "
+                    "skipping it; the webcam recording for %s looks broken.",
+                    f.name, game_path.name,
                 )
-            log.info(
-                "paired face recording %s (mtime delta %.1fs) with game %s",
-                best.name, best_delta, game_path.name,
+
+            # 2) FALLBACK — closest mtime within the window, validated. Only
+            #    reached when no name match exists at all.
+            game_mtime = game_path.stat().st_mtime
+            in_window = sorted(
+                (
+                    (abs(f.stat().st_mtime - game_mtime), f)
+                    for f in candidates
+                    if abs(f.stat().st_mtime - game_mtime) <= FACE_PAIR_WINDOW_SEC
+                ),
+                key=lambda t: t[0],
             )
-            return best
+            for delta, f in in_window:
+                if has_video_stream(f):
+                    log.info(
+                        "paired face by mtime %s (delta %.1fs) with game %s (no name match)",
+                        f.name, delta, game_path.name,
+                    )
+                    return f
+                log.warning(
+                    "mtime candidate face %s (delta %.1fs) has no video stream — skipping",
+                    f.name, delta,
+                )
+
+            log.warning(
+                "no valid face recording paired with %s — rendering single-source "
+                "(gameplay-only) for this batch. Check recordings/face/ and your webcam.",
+                game_path.name,
+            )
+            return None
         except Exception:
             log.exception("face-pair lookup failed for %s — single-source fallback", game_path)
             return None

@@ -69,6 +69,42 @@ def _optional_str(value) -> str | None:
     return str(value)
 
 
+def has_video_stream(path: str | Path) -> bool:
+    """True only if `path` exists and ffprobe finds a real video stream
+    (codec_type=video with non-zero width/height).
+
+    Non-raising — ANY problem returns False: missing file, audio-only/empty
+    container, zero-dimension stream, corrupt file, or ffprobe error. A
+    camera / Elgato Cam Link that drops mid-record leaves a file that pairs
+    fine by name or timestamp but has no usable video; the split renderer then
+    dies with "No video stream found" and takes the whole batch with it. Use
+    this to validate a face/clean-webcam recording before relying on it.
+    """
+    path = Path(path)
+    if not path.exists():
+        return False
+    try:
+        raw = _run_ffprobe([
+            "ffprobe", "-v", "quiet",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type,width,height",
+            "-print_format", "json",
+            str(path),
+        ])
+        data = json.loads(raw.decode("utf-8"))
+    except (RuntimeError, json.JSONDecodeError, subprocess.CalledProcessError):
+        return False
+    streams = data.get("streams", [])
+    if not streams:
+        return False
+    s = streams[0]
+    return (
+        s.get("codec_type") == "video"
+        and bool(_optional_int(s.get("width")))
+        and bool(_optional_int(s.get("height")))
+    )
+
+
 def probe_metadata(input_path):
     """Probe a media file with ffprobe; return a metadata dict.
 

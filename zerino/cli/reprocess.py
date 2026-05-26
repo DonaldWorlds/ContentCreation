@@ -120,7 +120,24 @@ def _warn_if_caption_pool_too_small(marker_count: int) -> None:
         print()
 
 
-def _reprocess_one(recording_id: int, svc: ClipService) -> bool:
+def _clear_redoable_clips(recording_id: int) -> int:
+    """Delete this recording's non-'completed' clip rows so they get re-cut and
+    re-rendered. Completed clips (already posted) are KEPT, so --force never
+    re-posts something that already went out — it only redoes failed/stuck
+    ones. Returns the number of rows deleted."""
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM clips WHERE recording_id=? AND status != 'completed'",
+                (recording_id,),
+            )
+            return cur.rowcount or 0
+    except sqlite3.Error as e:
+        log.warning("could not clear redoable clips for recording id=%s: %s", recording_id, e)
+        return 0
+
+
+def _reprocess_one(recording_id: int, svc: ClipService, *, force: bool = False) -> bool:
     overview = {d["id"]: d for d in _recordings_overview()}
     rec = overview.get(recording_id)
     if rec is None:
@@ -141,11 +158,18 @@ def _reprocess_one(recording_id: int, svc: ClipService) -> bool:
     _warn_if_caption_pool_too_small(rec["markers"])
 
     log.info(
-        "reprocess: recording id=%s file=%s markers=%d existing_clips=%d",
-        recording_id, rec["filename"], rec["markers"], rec["clips"],
+        "reprocess: recording id=%s file=%s markers=%d existing_clips=%d force=%s",
+        recording_id, rec["filename"], rec["markers"], rec["clips"], force,
     )
-    # Same code path the daemon uses at stream-end. Idempotent: existing clips
-    # are skipped, so already-posted markers are not re-sent.
+    if force:
+        cleared = _clear_redoable_clips(recording_id)
+        log.info(
+            "reprocess --force: cleared %d non-completed clip row(s) for recording id=%s "
+            "so they re-cut and re-render with the current code (already-posted clips kept).",
+            cleared, recording_id,
+        )
+    # Same code path the daemon uses at stream-end. Idempotent without --force:
+    # existing clips are skipped, so already-posted markers are not re-sent.
     svc.process_recording(recording_id)
 
     # Mark the recording done so a restarted daemon won't re-sweep it.
@@ -174,6 +198,10 @@ def main() -> None:
                        help="Recover this recording id (see --list).")
     group.add_argument("--all-pending", action="store_true",
                        help="Recover every recording with markers but no clips yet.")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-cut and re-render even if clips already exist (deletes the "
+                             "recording's non-completed clip rows first; already-posted clips "
+                             "are kept). Use after fixing a bad render, e.g. a corrupt face file.")
     args = parser.parse_args()
 
     if args.list:
@@ -190,7 +218,7 @@ def main() -> None:
     svc = ClipService()
 
     if args.recording_id is not None:
-        ok = _reprocess_one(args.recording_id, svc)
+        ok = _reprocess_one(args.recording_id, svc, force=args.force)
         raise SystemExit(0 if ok else 1)
 
     # --all-pending: recordings that have markers but no clips yet.
@@ -201,7 +229,7 @@ def main() -> None:
     log.info("recovering %d recording(s): %s", len(targets), targets)
     any_ok = False
     for rid in targets:
-        any_ok = _reprocess_one(rid, svc) or any_ok
+        any_ok = _reprocess_one(rid, svc, force=args.force) or any_ok
     raise SystemExit(0 if any_ok else 1)
 
 
