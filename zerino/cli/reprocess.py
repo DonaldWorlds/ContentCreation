@@ -98,43 +98,67 @@ def _print_list() -> None:
 
 
 def _warn_if_caption_pool_too_small(marker_count: int) -> None:
-    """Zernio rejects identical post text to the same account within 24h
-    ([409]). Each clip draws a random caption from the pool, so a pool smaller
-    than the number of clips guarantees some clips share text -> 409. Warn so
-    the operator can add captions before posting."""
+    """Clips post ~2h apart and captions now CYCLE through the active pool, so
+    a caption is reused only after pool_size * 2h. To stay past Zernio's 24h
+    duplicate-text [409] window the pool needs >= 13 active captions
+    (13 * 2h = 26h > 24h) — regardless of how many clips there are. Warn only
+    when it's below that."""
+    min_for_24h = 13
     n = _active_caption_count()
-    if n < marker_count:
+    if n < min_for_24h:
         print()
         print(
-            f"  WARNING: only {n} active caption(s) in the pool but this recording has "
-            f"{marker_count} clip(s)."
+            f"  NOTE: {n} active caption(s) in the pool. Clips post 2h apart and captions "
+            f"cycle, so a pool < {min_for_24h} can reuse a caption inside Zernio's 24h window "
+            f"and get [409]-rejected."
         )
         print(
-            "  Zernio blocks duplicate post text to the same account within 24h, so "
-            "clips that reuse a caption will be rejected [409]."
-        )
-        print(
-            f"  Add more first:  python -m zerino.cli.captions add \"your caption #hashtags\"  "
-            f"(aim for >= {marker_count})"
+            f"  Add a few more for safety:  python -m zerino.cli.captions add \"caption #tags\"  "
+            f"(aim for >= {min_for_24h})"
         )
         print()
 
 
-def _clear_redoable_clips(recording_id: int) -> int:
-    """Delete this recording's non-'completed' clip rows so they get re-cut and
-    re-rendered. Completed clips (already posted) are KEPT, so --force never
-    re-posts something that already went out — it only redoes failed/stuck
-    ones. Returns the number of rows deleted."""
+def _clear_redoable_clips(recording_id: int) -> tuple[int, int]:
+    """Delete this recording's clips so they re-cut/re-render — EXCEPT clips
+    that already produced a *published* post (re-doing those would duplicate
+    on Zernio). Also deletes the non-published posts of the redone clips so the
+    re-dispatch is clean. Returns (clips_deleted, clips_kept_published).
+
+    Why not filter on clip.status: a clip flips to 'completed' once its batch
+    is processed even if every render FAILED and zero posts were created (a
+    broken face does exactly that). So 'completed' does NOT mean "posted" — the
+    only safe "already live, don't redo" signal is a published POST row.
+    """
     try:
         with _connect() as conn:
-            cur = conn.execute(
-                "DELETE FROM clips WHERE recording_id=? AND status != 'completed'",
-                (recording_id,),
-            )
-            return cur.rowcount or 0
+            published = {
+                r[0] for r in conn.execute(
+                    "SELECT DISTINCT cl.id FROM clips cl "
+                    "JOIN posts p ON p.clip_id = cl.id "
+                    "WHERE cl.recording_id = ? AND p.status = 'published'",
+                    (recording_id,),
+                )
+            }
+            all_ids = {
+                r[0] for r in conn.execute(
+                    "SELECT id FROM clips WHERE recording_id = ?", (recording_id,)
+                )
+            }
+            redo = sorted(all_ids - published)
+            if redo:
+                ph = ",".join("?" * len(redo))
+                # drop only the NON-published posts of the redone clips first
+                # (keeps FK clean), then the clip rows themselves.
+                conn.execute(
+                    f"DELETE FROM posts WHERE clip_id IN ({ph}) AND status != 'published'",
+                    redo,
+                )
+                conn.execute(f"DELETE FROM clips WHERE id IN ({ph})", redo)
+            return len(redo), len(published)
     except sqlite3.Error as e:
         log.warning("could not clear redoable clips for recording id=%s: %s", recording_id, e)
-        return 0
+        return 0, 0
 
 
 def _reprocess_one(recording_id: int, svc: ClipService, *, force: bool = False) -> bool:
@@ -162,11 +186,11 @@ def _reprocess_one(recording_id: int, svc: ClipService, *, force: bool = False) 
         recording_id, rec["filename"], rec["markers"], rec["clips"], force,
     )
     if force:
-        cleared = _clear_redoable_clips(recording_id)
+        cleared, kept = _clear_redoable_clips(recording_id)
         log.info(
-            "reprocess --force: cleared %d non-completed clip row(s) for recording id=%s "
-            "so they re-cut and re-render with the current code (already-posted clips kept).",
-            cleared, recording_id,
+            "reprocess --force: cleared %d clip(s) to re-cut/re-render; kept %d already-"
+            "published clip(s) that won't be re-posted. recording id=%s",
+            cleared, kept, recording_id,
         )
     # Same code path the daemon uses at stream-end. Idempotent without --force:
     # existing clips are skipped, so already-posted markers are not re-sent.

@@ -18,11 +18,15 @@ to make a platform eligible for auto-posting.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from itertools import cycle as _cycle
 from pathlib import Path
 
 from zerino.config import get_logger
 from zerino.db.repositories.accounts_repository import list_all_accounts
-from zerino.db.repositories.captions_repository import pick_random_caption
+from zerino.db.repositories.captions_repository import (
+    active_captions_shuffled,
+    pick_random_caption,
+)
 from zerino.models import ClipJob
 from zerino.publishing.pipeline import (
     dispatch_post_ids,
@@ -202,6 +206,16 @@ def queue_clip_jobs_for_posting(
     now = datetime.now(timezone.utc)
     all_post_ids: list[int] = []
 
+    # Distinct-caption cycle for this batch (skipped when an explicit caption
+    # override is passed). Cycling a shuffled pool means a caption isn't reused
+    # until the whole pool has cycled; with `interval_minutes` spacing that's
+    # pool_size * interval between reuses — keep the pool >= 13 captions so that
+    # exceeds Zernio's 24h duplicate-text window and every clip posts.
+    caption_cycle = None
+    if not caption:
+        _pool = active_captions_shuffled()
+        caption_cycle = _cycle(_pool) if _pool else None
+
     print()
     print(f"=== Posting schedule for {len(jobs)} clip(s) ===")
 
@@ -223,9 +237,14 @@ def queue_clip_jobs_for_posting(
             when_full = job.scheduled_for.isoformat()
             job.mode = "scheduled"
 
-        # Caption: per-job override > batch override > random pool draw.
+        # Caption: per-job override > batch override > distinct-cycle draw.
         if not job.caption:
-            job.caption = caption if caption else (pick_random_caption() or "")
+            if caption:
+                job.caption = caption
+            elif caption_cycle is not None:
+                job.caption = next(caption_cycle)
+            else:
+                job.caption = pick_random_caption() or ""
         if not job.caption:
             log.warning(
                 "clip_to_posts: caption pool empty — clip_id=%s will post with no body.",

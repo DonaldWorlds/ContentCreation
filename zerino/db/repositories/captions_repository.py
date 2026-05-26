@@ -48,6 +48,15 @@ def delete_caption(caption_id: int) -> None:
         conn.execute("DELETE FROM captions WHERE id=?", (caption_id,))
 
 
+def _format_caption(row: dict[str, Any]) -> str:
+    """Format a caption row as post text: "<text>\n\n<hashtags>" or "<text>"."""
+    text = (row["text"] or "").strip()
+    hashtags = (row["hashtags"] or "").strip()
+    if text and hashtags:
+        return f"{text}\n\n{hashtags}"
+    return text or hashtags
+
+
 def pick_random_caption() -> str:
     """Pick a random active caption (weighted) and return formatted post text.
 
@@ -60,9 +69,19 @@ def pick_random_caption() -> str:
 
     weights = [max(1, int(r["weight"] or 1)) for r in rows]
     chosen = random.choices(rows, weights=weights, k=1)[0]
+    return _format_caption(chosen)
 
-    text = (chosen["text"] or "").strip()
-    hashtags = (chosen["hashtags"] or "").strip()
-    if text and hashtags:
-        return f"{text}\n\n{hashtags}"
-    return text or hashtags
+
+def active_captions_shuffled() -> list[str]:
+    """All active captions, formatted like pick_random_caption(), in random order.
+
+    A batch of clips assigns these in sequence and CYCLES when exhausted, so
+    adjacent clips never share text and a caption isn't reused until the whole
+    pool has been used once. With the default 2h post spacing that puts
+    pool_size * 2h between reuses — keep the pool big enough that this exceeds
+    24h (>=13 captions) and Zernio's duplicate-text [409] never trips. Returns
+    [] if the pool has no active rows.
+    """
+    formatted = [c for c in (_format_caption(r) for r in list_captions(active_only=True)) if c]
+    random.shuffle(formatted)
+    return formatted
