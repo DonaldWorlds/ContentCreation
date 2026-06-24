@@ -45,3 +45,6 @@ quality_report/
 
 # Synthetic dual-source verification output (frames from verify_dual_source.py)
 verify_dual/
+
+# Claude Code: commit shared project config (CLAUDE.md, skills); ignore machine-local only
+.claude/settings.local.json
