@@ -1,0 +1,18 @@
+# Zerino DEV / TEST dependencies (per-machine; NOT runtime deps).
+# Runtime deps live in requirements.txt. Install with:
+#   venv\Scripts\python -m pip install -r requirements-dev.txt   (Windows, canonical venv)
+#
+# Detection test suite:
+pytest>=8.0
+
+# Phase 2 Fortnite adapter — default OCR path (Tesseract-CPU).
+# pytesseract is a thin wrapper over the Tesseract BINARY, which is installed
+# separately (it is not a pip package):
+#   Windows: winget install -e --id UB-Mannheim.TesseractOCR
+#   macOS:   brew install tesseract
+pytesseract>=0.3.10
+
+# NOTE: torch / easyocr are DEFERRED (DETECTION_DECISIONS §2, CP1). The default
+# Fortnite path is Tesseract-CPU + numpy/ffmpeg audio onset and needs neither.
+# Only add a CUDA torch wheel (verifying sm_61 at that point) if golden-VOD
+# recall < 0.8 forces the EasyOCR-small fallback.

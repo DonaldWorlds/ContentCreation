@@ -48,3 +48,8 @@ verify_dual/
 
 # Claude Code: commit shared project config (CLAUDE.md, skills); ignore machine-local only
 .claude/settings.local.json
+
+# Golden-VOD test media (large, derived from gitignored recordings/). Commit the
+# small .labels.json sidecars; keep the .mp4 segments machine-local (regenerate via
+# scratchpad/cut_golden.py). The golden P/R test skips when the media is absent.
+tests/detection/fixtures/**/*.mp4

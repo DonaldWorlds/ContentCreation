@@ -226,11 +226,43 @@ def main() -> None:
                         help="Re-cut and re-render even if clips already exist (deletes the "
                              "recording's non-completed clip rows first; already-posted clips "
                              "are kept). Use after fixing a bad render, e.g. a corrupt face file.")
+    parser.add_argument("--detect", action="store_true",
+                        help="Run highlight DETECTION on the recording (emit detected windows + "
+                             "detections rows) instead of re-cutting saved F8/F9 markers. "
+                             "Idempotent. Add --render to also cut+post the detected clips.")
+    parser.add_argument("--game", default="fortnite",
+                        help="GameProfile id for --detect (default: fortnite).")
+    parser.add_argument("--render", action="store_true",
+                        help="With --detect: feed detected windows to the existing render+post "
+                             "path (default OFF — trust gate).")
     args = parser.parse_args()
 
     if args.list:
         _print_list()
         return
+
+    if args.detect:
+        if args.recording_id is None:
+            log.error("--detect requires --recording-id N")
+            raise SystemExit(2)
+        try:
+            run_capture_healthcheck()
+        except HealthcheckError as e:
+            log.error("startup healthcheck failed: %s", e)
+            raise SystemExit(1)
+        from zerino.cli.detect import detect_recording
+        conn = _connect()
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            windows = detect_recording(
+                args.recording_id, game=args.game, render=args.render,
+                conn=conn, clip_service=ClipService() if args.render else None,
+            )
+        finally:
+            conn.close()
+        log.info("reprocess --detect: recording id=%s -> %d detected window(s) (render=%s)",
+                 args.recording_id, len(windows), args.render)
+        raise SystemExit(0)
 
     # Anything that renders/posts needs ffmpeg etc. — same gate as the daemon.
     try:

@@ -1,0 +1,15 @@
+{
+  "source_recording": "recordings/2026-06-03 05-21-04.mkv",
+  "segment_file": "v26_seg3_src3885-3945.mp4",
+  "gamertag": "kkthedon_",
+  "segment_source_start": 3885.0,
+  "segment_source_end": 3945.0,
+  "fps": 60,
+  "label_time_basis": "segment-relative seconds (t_source = 3885.0 + t)",
+  "match_tolerance_sec": 2.5,
+  "status": "DRAFT from feed-OCR (4s sampling, coarse); provisional pending watch-confirmation",
+  "elims": [
+    {"t": 15, "type": "KNOCK", "value": "multi", "note": "'kkthedon_ knocked out ... with a rifle'"},
+    {"t": 19, "type": "KNOCK", "value": "multi", "note": "'kkthedon_ knocked out ... with a rifle' (confirm follow-up elims by watching)"}
+  ]
+}

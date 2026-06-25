@@ -1,0 +1,51 @@
+# Fortnite GameProfile (DETECTION_DECISIONS.md §3). YAML on disk, loaded into the
+# typed GameProfile dataclass (zerino.detection.profile.load_profile).
+# Calibrated against real OBS recordings on the Windows box (branch
+# detection-phase2-fortnite). HUD regions are fractional 0-1 (resolution-independent).
+# Values are TUNABLE dials — adjust against the golden-VOD P/R harness; do not hardcode.
+
+game_id: fortnite
+profile_version: "1"
+detector_version: "fortnite-0.1.0"
+
+# Decision 1 — my events only. gamertag travels with the operator's own feed lines;
+# aliases cover gamertag changes across VODs (e.g. older accounts). The adapter filters
+# on these (never the core), preferring the color-highlight cue + fuzzy match (OCR
+# mangles the stylized feed font).
+player_identity:
+  gamertag: "kkthedon_"
+  aliases: []
+
+# Fractional 0-1 HUD regions (calibrated at 1080p; fractions scale to 30/60fps + res).
+#   elim_feed   = LEFT-side mid-screen kill feed ("<name> eliminated/knocked <victim>")
+#   elim_banner = CENTER "ELIMINATION xN" / "KNOCKED" splash — appears ONLY for the
+#                 operator's own elims (best my-elim + multi-kill-count signal).
+hud_regions:
+  elim_feed:   {x: 0.0,  y: 0.44, w: 0.34, h: 0.22}
+  elim_banner: {x: 0.50, y: 0.26, w: 0.30, h: 0.18}
+
+# Rarity / base highlight value per event type (applied by the adapter).
+# Recall weighted toward high-value events (DETECTION_DECISIONS.md §5): MULTI_ELIM >> KILL.
+event_weights:
+  KILL:       1.0
+  KNOCK:      0.5
+  MULTI_ELIM: 3.0
+  VICTORY:    2.0
+
+# Decision 3+4 — the tunable scoring DIAL. Fortnite's bar is LOWER than 2K's (elims
+# are rarer than baskets). Raise if too many boring clips; lower if too few.
+score_threshold: 1.0
+
+# Core math knobs (project into CoreParams). Events within cluster_gap join one window
+# (multi-kill = one ranked-up clip, Decision 2). PRE > POST -> climax at pre/(pre+post) ~ 67%.
+cluster_gap:   6.0
+cluster_bonus: 1.5
+pre:  8.0
+post: 4.0
+clip_budget: 5      # ranked shortlist size vs the ~2h posting cadence (Decision 3)
+min_dur: 8.0
+max_dur: 45.0
+
+# Decision 5 — detected clips default to split (game + Sony face-cam); vertical
+# fallback inherited from the existing F9 render path when no face pair exists.
+default_layout: split
