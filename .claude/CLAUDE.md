@@ -43,6 +43,8 @@ docs; it does not duplicate them.
 - HISTORICAL (do not follow as current): HANDOFF_TO_ZERINO.md, DUAL_SOURCE_SPLIT_PLAN.md
 
 ## Status
-Highlight detection: CP1 interface spec APPROVED 2026-06-24 (see PROJECT_REVIEW.md §E).
-Work on branch `highlight-detection`; main stays shippable. Phase 0.5 next, tests-first.
-No feature code yet / no zerino/detection/ package.
+Highlight detection: PHASE 1 COMPLETE (merged to main). Foundation + game-agnostic core
+(fuse->score->window->dedupe->budget) + wiring (GameProfile, DetectorAdapter ABC,
+detect_and_emit; bridge to live render OFF by default). 32 detection tests green.
+NEXT: Phase 2 — Fortnite adapter (real OCR + audio, MediaHandle, golden-VOD precision/recall)
+on the Windows box; start with the probe_timebase VFR check. See DETECTION_DECISIONS.md.
