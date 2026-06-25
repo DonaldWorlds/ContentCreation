@@ -7,12 +7,10 @@
   "fps": 60,
   "label_time_basis": "segment-relative seconds (t_source = 515.0 + t)",
   "match_tolerance_sec": 2.5,
-  "status": "DRAFT from feed-OCR + center-banner; provisional pending watch-confirmation",
+  "status": "RECONCILED to footage (EVIDENCE-DERIVED, pending operator ratification). Draft 16/28 knocks had ZERO own-elim evidence; the confirmed triple-kill sequence is at ~38-55s (banner + feed). Operator confirmed 'genuine triple-kill'; exact times from fine-scan OCR.",
   "elims": [
-    {"t": 16, "type": "KNOCK",      "value": "multi", "note": "knock (OCR mangled)"},
-    {"t": 28, "type": "KNOCK",      "value": "multi", "note": "'knocked out ... with a rifle'"},
-    {"t": 40, "type": "KILL",       "value": "multi", "note": "'kkthedon_ eliminated Susiyess...'"},
-    {"t": 55, "type": "KILL",       "value": "multi", "note": "'kkthedon_ eliminated AngelEye30'"},
-    {"t": 55, "type": "MULTI_ELIM", "value": "multi", "note": "center banner 'ELIMINATION x3'; 'eliminated 2Xtrouble13'"}
+    {"t": 38, "type": "KILL",       "value": "multi", "note": "center banner 'ELIMINATION'"},
+    {"t": 42, "type": "KILL",       "value": "multi", "note": "feed 'kkthedon_ eliminated' (OCR 'kkthesun (i171')"},
+    {"t": 54, "type": "MULTI_ELIM", "value": "multi", "note": "KNOCK banner @54 + 'ELIMINATION xN' banner @55 — triple-kill climax"}
   ]
 }

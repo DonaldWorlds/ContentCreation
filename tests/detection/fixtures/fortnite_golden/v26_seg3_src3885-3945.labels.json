@@ -7,9 +7,8 @@
   "fps": 60,
   "label_time_basis": "segment-relative seconds (t_source = 3885.0 + t)",
   "match_tolerance_sec": 2.5,
-  "status": "DRAFT from feed-OCR (4s sampling, coarse); provisional pending watch-confirmation",
+  "status": "RECONCILED + operator-confirmed (watched): one real elimination ~25s.",
   "elims": [
-    {"t": 15, "type": "KNOCK", "value": "multi", "note": "'kkthedon_ knocked out ... with a rifle'"},
-    {"t": 19, "type": "KNOCK", "value": "multi", "note": "'kkthedon_ knocked out ... with a rifle' (confirm follow-up elims by watching)"}
+    {"t": 25, "type": "KILL", "value": "routine", "note": "operator-confirmed kill; center banner 'ELIMINATION' ~t24-26 (detector caught t=24). The ~17-19s knock is a squadmate's (count (27) != kkthedon's (121)) — excluded per my-events-only."}
   ]
 }

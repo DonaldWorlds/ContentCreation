@@ -43,8 +43,18 @@ docs; it does not duplicate them.
 - HISTORICAL (do not follow as current): HANDOFF_TO_ZERINO.md, DUAL_SOURCE_SPLIT_PLAN.md
 
 ## Status
-Highlight detection: PHASE 1 COMPLETE (merged to main). Foundation + game-agnostic core
-(fuse->score->window->dedupe->budget) + wiring (GameProfile, DetectorAdapter ABC,
-detect_and_emit; bridge to live render OFF by default). 32 detection tests green.
-NEXT: Phase 2 — Fortnite adapter (real OCR + audio, MediaHandle, golden-VOD precision/recall)
-on the Windows box; start with the probe_timebase VFR check. See DETECTION_DECISIONS.md.
+Highlight detection: PHASE 2 BUILT (Fortnite adapter, merged to main). Two-stage audio-gated
+OCR (center banner = own-elim + multi-kill signal; left feed + fuzzy/alias gamertag; identity
+filter strict — squadmate elims excluded), MediaHandle (one shared decode), probe_timebase
+(OBS = CFR 30/60), cache idempotency, cli/detect.py + reprocess --detect. Render/capture/schema
+untouched; render OFF by default.
+Golden P/R = 1.00/1.00 on the 3 CALIBRATED segments — ⚠️ NOT yet validated on unseen footage
+(labels + detector share the same OCR signals, so this proves "catches kills present in calibrated
+footage", not generalization). Suite green; golden-VOD gate still xfail.
+NEXT = render-mode CP cycle (NOT started; opens when operator has time):
+  1. FIRST — unseen-footage validation: cut a FRESH Fortnite segment never used for calibration,
+     run detection, confirm it generalizes BEFORE any live wiring.
+  2. operator to ratify seg1 label times (38/42/54, evidence-derived).
+  3. flip the golden-VOD xfail -> hard gate ONLY after unseen validation passes.
+  4. only then connect the detected windows to the live render/post path (still gated).
+See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].
