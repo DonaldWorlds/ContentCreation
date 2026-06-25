@@ -13,3 +13,6 @@ Pillow>=10.0.0          # image processor (thumbnails, carousels)
 zernio-sdk==1.3.68
 python-dotenv==1.2.2
 requests>=2.31.0
+
+# Detection (highlight detection layer)
+pyyaml>=6.0             # GameProfile YAML configs (zerino.detection.profile.load_profile)
