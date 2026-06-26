@@ -47,14 +47,17 @@ Highlight detection: PHASE 2 BUILT + UNSEEN-VALIDATED (Fortnite adapter, merged 
 Two-stage audio-gated OCR (banner = own-elim + multi-kill signal; left feed + fuzzy/alias
 gamertag; identity filter strict — squadmate elims excluded), MediaHandle, probe_timebase
 (OBS = CFR 30/60), cache idempotency, cli/detect.py + reprocess --detect.
-Render-mode integration CP (branch detection-phase2-integration) — gated steps:
+Render-mode integration CP (merged to main) — all gated steps DONE:
   Step A ✅ UNSEEN-FOOTAGE VALIDATION PASSED on 2026-06-26 00-08-55 — the real detector emitted
-    8 events (380 KILL, 410 MULTI_ELIM x6, 476/487/492 KNOCK, 496 MULTI_ELIM x4, 934 KILL) that
-    the operator confirmed match real kills, with NO code change. Detection GENERALIZES.
+    8 events (380 KILL, 410 MULTI_ELIM x6, 476/487/492 KNOCK, 496 MULTI_ELIM x4, 934 KILL) the
+    operator confirmed match real kills, NO code change. Detection GENERALIZES.
   Step B ✅ seg1 golden times 38/42/54 OPERATOR-RATIFIED; test_golden_pr flipped xfail -> HARD
     assert (P/R 1.00 on the 3 calibrated segments).
-  Step C ⏳ NOT started, render OFF — render-for-review smoke test: detected windows -> existing
-    split renderer + face pair (Decision 5), NO post, output to a review dir. Requires explicit
-    operator approval before any render.
-Render/capture/schema untouched; render OFF by default; create_clips path NEVER used (it auto-
-posts inline). See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].
+  Step C ✅ RENDER-TO-REVIEW PROVEN — cli/detect.py --render-review DIR renders detected windows
+    via the existing split renderer + face pair (Decision 5) into a review dir, NO post. Smoke
+    test made 2 split clips on the multi-kill climaxes (clips in renders/detection_review/);
+    operator spot-check PASSED.
+NEXT (gated, UNAPPROVED): the LIVE render+POST connection — auto-wire detection into the path
+that actually posts to Zernio. Render-to-POST stays OFF until the operator deliberately opens it.
+Render/capture/schema untouched; create_clips/queue_clip_jobs_for_posting NEVER used by detection
+(they auto-dispatch to Zernio inline). See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].
