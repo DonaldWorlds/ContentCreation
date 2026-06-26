@@ -229,12 +229,11 @@ def main() -> None:
     parser.add_argument("--detect", action="store_true",
                         help="Run highlight DETECTION on the recording (emit detected windows + "
                              "detections rows) instead of re-cutting saved F8/F9 markers. "
-                             "Idempotent. Add --render to also cut+post the detected clips.")
+                             "Idempotent. Auto-post is gated by the ZERINO_DETECTION_AUTOPOST "
+                             "master flag (default OFF); when ON, detected windows ride the same "
+                             "create_clips/post path F8/F9 uses.")
     parser.add_argument("--game", default="fortnite",
                         help="GameProfile id for --detect (default: fortnite).")
-    parser.add_argument("--render", action="store_true",
-                        help="With --detect: feed detected windows to the existing render+post "
-                             "path (default OFF — trust gate).")
     args = parser.parse_args()
 
     if args.list:
@@ -250,18 +249,15 @@ def main() -> None:
         except HealthcheckError as e:
             log.error("startup healthcheck failed: %s", e)
             raise SystemExit(1)
-        from zerino.cli.detect import detect_recording
+        from zerino.cli.detect import autopost_enabled, detect_recording
         conn = _connect()
         conn.execute("PRAGMA foreign_keys = ON")
         try:
-            windows = detect_recording(
-                args.recording_id, game=args.game, render=args.render,
-                conn=conn, clip_service=ClipService() if args.render else None,
-            )
+            windows = detect_recording(args.recording_id, game=args.game, conn=conn)
         finally:
             conn.close()
-        log.info("reprocess --detect: recording id=%s -> %d detected window(s) (render=%s)",
-                 args.recording_id, len(windows), args.render)
+        log.info("reprocess --detect: recording id=%s -> %d detected window(s) (autopost=%s)",
+                 args.recording_id, len(windows), autopost_enabled())
         raise SystemExit(0)
 
     # Anything that renders/posts needs ffmpeg etc. — same gate as the daemon.
