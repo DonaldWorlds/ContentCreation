@@ -7,7 +7,7 @@
   "fps": 60,
   "label_time_basis": "segment-relative seconds (t_source = 515.0 + t)",
   "match_tolerance_sec": 2.5,
-  "status": "RECONCILED to footage (EVIDENCE-DERIVED, pending operator ratification). Draft 16/28 knocks had ZERO own-elim evidence; the confirmed triple-kill sequence is at ~38-55s (banner + feed). Operator confirmed 'genuine triple-kill'; exact times from fine-scan OCR.",
+  "status": "OPERATOR-RATIFIED (2026-06-26). Times 38/42/54 confirmed by the operator. Draft 16/28 knocks had ZERO own-elim evidence and were dropped; the genuine triple-kill sequence is at ~38-55s (banner + feed).",
   "elims": [
     {"t": 38, "type": "KILL",       "value": "multi", "note": "center banner 'ELIMINATION'"},
     {"t": 42, "type": "KILL",       "value": "multi", "note": "feed 'kkthedon_ eliminated' (OCR 'kkthesun (i171')"},

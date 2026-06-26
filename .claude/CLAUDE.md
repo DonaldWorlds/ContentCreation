@@ -43,18 +43,18 @@ docs; it does not duplicate them.
 - HISTORICAL (do not follow as current): HANDOFF_TO_ZERINO.md, DUAL_SOURCE_SPLIT_PLAN.md
 
 ## Status
-Highlight detection: PHASE 2 BUILT (Fortnite adapter, merged to main). Two-stage audio-gated
-OCR (center banner = own-elim + multi-kill signal; left feed + fuzzy/alias gamertag; identity
-filter strict — squadmate elims excluded), MediaHandle (one shared decode), probe_timebase
-(OBS = CFR 30/60), cache idempotency, cli/detect.py + reprocess --detect. Render/capture/schema
-untouched; render OFF by default.
-Golden P/R = 1.00/1.00 on the 3 CALIBRATED segments — ⚠️ NOT yet validated on unseen footage
-(labels + detector share the same OCR signals, so this proves "catches kills present in calibrated
-footage", not generalization). Suite green; golden-VOD gate still xfail.
-NEXT = render-mode CP cycle (NOT started; opens when operator has time):
-  1. FIRST — unseen-footage validation: cut a FRESH Fortnite segment never used for calibration,
-     run detection, confirm it generalizes BEFORE any live wiring.
-  2. operator to ratify seg1 label times (38/42/54, evidence-derived).
-  3. flip the golden-VOD xfail -> hard gate ONLY after unseen validation passes.
-  4. only then connect the detected windows to the live render/post path (still gated).
-See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].
+Highlight detection: PHASE 2 BUILT + UNSEEN-VALIDATED (Fortnite adapter, merged to main).
+Two-stage audio-gated OCR (banner = own-elim + multi-kill signal; left feed + fuzzy/alias
+gamertag; identity filter strict — squadmate elims excluded), MediaHandle, probe_timebase
+(OBS = CFR 30/60), cache idempotency, cli/detect.py + reprocess --detect.
+Render-mode integration CP (branch detection-phase2-integration) — gated steps:
+  Step A ✅ UNSEEN-FOOTAGE VALIDATION PASSED on 2026-06-26 00-08-55 — the real detector emitted
+    8 events (380 KILL, 410 MULTI_ELIM x6, 476/487/492 KNOCK, 496 MULTI_ELIM x4, 934 KILL) that
+    the operator confirmed match real kills, with NO code change. Detection GENERALIZES.
+  Step B ✅ seg1 golden times 38/42/54 OPERATOR-RATIFIED; test_golden_pr flipped xfail -> HARD
+    assert (P/R 1.00 on the 3 calibrated segments).
+  Step C ⏳ NOT started, render OFF — render-for-review smoke test: detected windows -> existing
+    split renderer + face pair (Decision 5), NO post, output to a review dir. Requires explicit
+    operator approval before any render.
+Render/capture/schema untouched; render OFF by default; create_clips path NEVER used (it auto-
+posts inline). See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].

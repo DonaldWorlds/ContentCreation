@@ -22,18 +22,13 @@ LABELS = sorted(FIXTURES.glob("*.labels.json"))
 HAVE_MEDIA = LABELS and all((FIXTURES / json.loads(p.read_text())["segment_file"]).exists()
                             for p in LABELS)
 
-pytestmark = [
-    pytest.mark.skipif(not HAVE_MEDIA,
-                       reason="golden media is machine-local (regenerate via scratchpad/cut_golden.py)"),
-    # PROVISIONAL gate. The labels are DRAFT (operator watch-corrections pending) and the
-    # OCR is first-pass on busy battle-royale footage — recall is below the 0.8 floor today
-    # (measured ~0.38). Per the operator's CP3 note, the first golden numbers are NOT final.
-    # xfail(strict=False) keeps the suite green while the gate is honestly red; once the
-    # corrected labels are in and OCR is tuned, this passes -> XPASS -> remove the mark to
-    # make it a hard gate. DETECTION_DECISIONS.md §5.
-    pytest.mark.xfail(reason="provisional labels + first-pass OCR; hard gate after corrected labels",
-                      strict=False),
-]
+# HARD GATE (DETECTION_DECISIONS.md §5). Labels are operator-ratified (seg1 38/42/54
+# confirmed; seg2@16, seg3@25 watch-confirmed) and unseen-footage validation PASSED
+# (2026-06-26 00-08-55: 8 events matched real kills, no code change), so the provisional
+# xfail was removed and this now asserts the recall>=0.8 / precision>=0.7 floor.
+pytestmark = pytest.mark.skipif(
+    not HAVE_MEDIA,
+    reason="golden media is machine-local (regenerate via scratchpad/cut_golden.py)")
 
 # value weighting: missing a multi-kill is far worse than missing a routine kill
 VALUE_WEIGHT = {"routine": 1.0, "multi": 3.0, "clutch": 4.0}
