@@ -57,7 +57,16 @@ Render-mode integration CP (merged to main) — all gated steps DONE:
     via the existing split renderer + face pair (Decision 5) into a review dir, NO post. Smoke
     test made 2 split clips on the multi-kill climaxes (clips in renders/detection_review/);
     operator spot-check PASSED.
-NEXT (gated, UNAPPROVED): the LIVE render+POST connection — auto-wire detection into the path
-that actually posts to Zernio. Render-to-POST stays OFF until the operator deliberately opens it.
-Render/capture/schema untouched; create_clips/queue_clip_jobs_for_posting NEVER used by detection
-(they auto-dispatch to Zernio inline). See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].
+FULL HANDS-OFF PIPELINE COMPLETE + MERGED (shipping OFF behind two independent switches):
+  recording finishes -> ClipWorker.process_recording (manual F8/F9, unchanged) -> [AUTORUN]
+  detect_recording -> detect/core/emit -> [AUTOPOST] create_clips -> queue_clip_jobs_for_posting
+  -> Zernio (the SAME path F8/F9 uses; reviewed on the Zernio dashboard, no human-in-loop step).
+Two switches, BOTH DEFAULT OFF (feature fully inert; daemon byte-identical until flipped):
+  - ZERINO_DETECTION_AUTORUN  = does detection run when a recording finishes (clip_worker hook).
+  - ZERINO_DETECTION_AUTOPOST = does detection post (gated inside detect_recording).
+Rails when ON: per-profile score_threshold (only high-value), clip_budget + ~2h cadence (no flood).
+§4 honored: manual F8/F9 + create_clips/queue/render untouched (recipe-pins green); detection
+lazy-imported (flag OFF -> daemon imports no detection/OCR/GPU); detection errors caught per-job.
+TO GO LIVE (operator, in order): (1) fix the capture card (Elgato NO-SIGNAL face); (2) flip
+AUTORUN=1 for a dress rehearsal (detection runs + emits, still no posts); (3) flip AUTOPOST=1
+to actually post. See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].
