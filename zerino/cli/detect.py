@@ -84,6 +84,44 @@ def _dry_run_file(path: str, game: str) -> int:
     return 0
 
 
+def render_review(path, game: str, review_dir) -> list:
+    """Step C render-for-review (NO POST, render-only). detect -> core -> render each
+    detected window through the EXISTING SplitProcessor (dual-source split + face pair,
+    Decision 5) into review_dir. NEVER touches create_clips / queue_clip_jobs_for_posting /
+    Zernio — SplitProcessor.process_clip_job only renders + returns the output path."""
+    from pathlib import Path
+
+    from zerino.detection.core.pipeline import run as core_run
+    from zerino.models import ClipJob
+    from zerino.processors.split import SplitProcessor
+
+    profile = load_profile(game)
+    adapter = _adapter(game)
+    media = MediaHandle.open(path)
+    duration = media.timebase.duration if media.timebase else 0.0
+    candidates = core_run(adapter.detect(media, profile), profile.core_params(), duration)
+
+    review_dir = Path(review_dir)
+    review_dir.mkdir(parents=True, exist_ok=True)
+    face = media.face_source_path
+    proc = SplitProcessor()
+    outputs = []
+    print(f"\n{path}\n  game={game}  detected_windows={len(candidates)}  "
+          f"face={'paired' if face else 'NONE (single-source split fallback)'}")
+    for i, c in enumerate(sorted(candidates, key=lambda x: x.win_start), 1):
+        job = ClipJob(
+            clip_id=None, source_path=Path(media.source_path),
+            start=float(c.win_start), end=float(c.win_end),
+            layout="split", face_source_path=Path(face) if face else None,
+        )
+        res = proc.process_clip_job(job, platform="tiktok", output_dir=review_dir)
+        outputs.append(res.output_path)
+        print(f"  clip {i}: win=[{c.win_start:.1f}-{c.win_end:.1f}]s anchor={c.anchor_t:.1f} "
+              f"score={c.score:.2f} -> {res.output_path}")
+    print(f"\nrendered {len(outputs)} review clip(s) to {review_dir} — NO post, no DB rows, render-only.")
+    return outputs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run highlight detection on a recording or file.")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -92,7 +130,17 @@ def main() -> None:
     parser.add_argument("--game", default="fortnite", help="GameProfile id (default: fortnite).")
     parser.add_argument("--render", action="store_true",
                         help="Feed detected windows to the existing render+post path (default OFF — trust gate).")
+    parser.add_argument("--render-review", default=None, metavar="DIR",
+                        help="Step C: render detected windows through the EXISTING split renderer "
+                             "(dual-source + face pair, Decision 5) into DIR for manual review. "
+                             "NO post, never via create_clips. Requires --file.")
     args = parser.parse_args()
+
+    if args.render_review:
+        if not args.file:
+            raise SystemExit("--render-review requires --file")
+        render_review(args.file, args.game, args.render_review)
+        raise SystemExit(0)
 
     if args.file:
         raise SystemExit(_dry_run_file(args.file, args.game))
