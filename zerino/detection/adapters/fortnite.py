@@ -17,7 +17,9 @@ from zerino.detection.adapters.base import DetectorAdapter
 from zerino.detection.events import Event
 from zerino.detection.profile import GameProfile
 
-OCR_DT = 1.0          # seconds between sampled frames inside a hot region
+OCR_DT = 0.333        # seconds between sampled frames in a hot region (~3 fps). The elim
+                      # banner is transient (~2-3s) + stylized; 1 fps missed kills run-to-run
+                      # (rec33: 1fps caught 2-3/4, 3fps caught 4/4). ~3x OCR cost, batch-only.
 SUPPRESS_GAP = 3.5    # refractory window: one event per this many seconds (feed persists
                       # on-screen for ~5s, so the SAME elim is OCR'd across several frames)
 _TYPE_RANK = {"MULTI_ELIM": 3, "VICTORY": 2, "KILL": 1, "KNOCK": 0}

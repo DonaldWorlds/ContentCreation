@@ -37,14 +37,19 @@ event_weights:
 score_threshold: 1.0
 
 # Core math knobs (project into CoreParams). Events within cluster_gap join one window
-# (multi-kill = one ranked-up clip, Decision 2). PRE > POST -> climax at pre/(pre+post) ~ 67%.
-cluster_gap:   6.0
+# (multi-kill = one ranked-up clip, Decision 2). With cluster-span windowing the clip covers
+# [first_event - pre, last_event + post] so a whole team wipe is ONE clip (pre/post are now
+# lead-in / aftermath pads, not a climax offset). cluster_gap=24 bundles a solo team wipe
+# (kills up to ~22s apart, even if an intervening knock is missed); the trade is two genuinely
+# separate fights within ~24s can merge. min/max_dur set the clip-length floor/ceiling: a
+# 4-kill wipe spans ~42s, so max_dur=55 holds it + pads; min_dur=30 is the monetization floor.
+cluster_gap:   24.0
 cluster_bonus: 1.5
-pre:  8.0
-post: 4.0
+pre:  5.0
+post: 8.0
 clip_budget: 5      # ranked shortlist size vs the ~2h posting cadence (Decision 3)
-min_dur: 8.0
-max_dur: 45.0
+min_dur: 30.0
+max_dur: 55.0
 
 # Decision 5 — detected clips default to split (game + Sony face-cam); vertical
 # fallback inherited from the existing F9 render path when no face pair exists.

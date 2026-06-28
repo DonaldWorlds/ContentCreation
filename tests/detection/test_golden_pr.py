@@ -33,6 +33,14 @@ pytestmark = pytest.mark.skipif(
 # value weighting: missing a multi-kill is far worse than missing a routine kill
 VALUE_WEIGHT = {"routine": 1.0, "multi": 3.0, "clutch": 4.0}
 
+# The golden labels are ELIMINATIONS. KNOCKs (downs) are detected by design — they bridge
+# kills in clustering — but they are not eliminations, and a lone knock scores below
+# score_threshold so it never becomes a clip. Denser sampling (OCR_DT=0.333) catches more
+# knocks; scoring those real downs against elim-only labels would be a category error (it
+# tanked precision to 0.56 while every predicted ELIM still matched a label). So the P/R gate
+# evaluates predicted eliminations against the elim labels.
+ELIM_TYPES = {"KILL", "MULTI_ELIM", "VICTORY"}
+
 
 def _precision_recall(pred_ts, labels, tol):
     """Greedy 1:1 match of predicted times to labeled times within `tol`."""
@@ -63,7 +71,7 @@ def test_golden_precision_recall_meets_floor():
         tol = meta.get("match_tolerance_sec", 2.5)
         media = MediaHandle.open(FIXTURES / meta["segment_file"])
         events = adapter.detect(media, profile)           # CP3 implements
-        all_pred.extend(e.t for e in events)
+        all_pred.extend(e.t for e in events if e.type in ELIM_TYPES)   # elims vs elim labels
         all_labels.extend(meta["elims"])
 
     precision, recall, recall_w = _precision_recall(all_pred, all_labels, tol)
