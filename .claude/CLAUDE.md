@@ -70,3 +70,13 @@ lazy-imported (flag OFF -> daemon imports no detection/OCR/GPU); detection error
 TO GO LIVE (operator, in order): (1) fix the capture card (Elgato NO-SIGNAL face); (2) flip
 AUTORUN=1 for a dress rehearsal (detection runs + emits, still no posts); (3) flip AUTOPOST=1
 to actually post. See DETECTION_DECISIONS.md + memory [[fortnite-detection-calibration]].
+RECALL TUNING (merged to main, render OFF): first live test (recording 33) caught only 1 of a
+solo 4-kill team wipe. Root cause = OCR recall (transient/stylized elim banner, 1fps luck-of-frame)
++ windowing (4 kills spanned ~42s but the clip anchored on one kill +/- pre/post). Fixes, all
+shipped: OCR_DT 1.0->0.333 (~3fps; rec33 1fps caught 2-3/4, 3fps 4/4), cluster_gap 6->24 (bundle
+the wipe), and a CORE SEMANTIC change — window.py is now CLUSTER-SPAN ([first-pre, last+post], a
+multi-kill cluster = ONE clip covering every kill; single-event clusters unchanged, climax ~67%),
+pre/post=5/8 pads, min_dur 30 (monetization), max_dur 55. rec33 now = ONE [364-418]s/55s clip with
+all 4 kills (fresh end-to-end re-OCR verified). golden P/R measured on ELIMINATIONS now (KNOCKs are
+real downs, below-threshold alone -> never post; scoring them vs elim labels was a category error);
+elim P/R still 1.00/1.00. Lone-kill threshold = separate later decision (kept).
