@@ -19,7 +19,13 @@ def test_fortnite_profile_loads_with_calibrated_values():
         assert {"x", "y", "w", "h"} == set(r)
     # recall weighted toward high-value events (DETECTION_DECISIONS §5)
     assert p.event_weights["MULTI_ELIM"] > p.event_weights["KILL"]
-    # core math knobs project cleanly + PRE > POST (climax ~67%)
+    # core math knobs project cleanly. Cluster-span windowing: a multi-kill cluster is ONE
+    # clip spanning [first-pre, last+post], so pre/post are lead-in/aftermath pads (NOT a
+    # climax offset) and pre>post is no longer required. cluster_gap=24 bundles a solo team
+    # wipe; min_dur=30 is the monetization floor; max_dur holds a ~42s 4-kill wipe + pads.
     cp = p.core_params()
-    assert cp.pre > cp.post
+    assert cp.pre > 0 and cp.post > 0
+    assert cp.cluster_gap == 24.0
+    assert cp.min_dur == 30.0
+    assert cp.max_dur >= cp.min_dur
     assert cp.clip_budget >= 1
