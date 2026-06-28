@@ -59,12 +59,12 @@ def detect_recording(recording_id: int, *, game: str = "fortnite",
     from pathlib import Path
 
     row = conn.execute(
-        "SELECT filename, streamer_id FROM recordings WHERE id=?", (recording_id,)
+        "SELECT filename FROM recordings WHERE id=?", (recording_id,)
     ).fetchone()
     if row is None:
         raise SystemExit(f"recording id={recording_id} not found")
     filename = row[0]
-    streamer_id = row[1] if len(row) > 1 else None
+    streamer_id = None  # recordings has no streamer_id; detected markers carry NULL (nullable)
     source = Path(recordings_dir) / filename
     if not source.exists():
         raise SystemExit(f"source file missing on disk: {source}")
