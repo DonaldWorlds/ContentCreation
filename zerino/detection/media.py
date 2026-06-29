@@ -7,7 +7,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from zerino.config import get_logger
 from zerino.detection.timebase import Timebase, probe_timebase
+
+log = get_logger("zerino.detection.media")
+
+# A single-frame seek+decode is normally well under 1s; 20s is ~20-40x that. Past it the
+# ffmpeg call is treated as STALLED (a bad seek that would otherwise hang the whole pass —
+# it once froze detection for an hour), killed, and the frame skipped. Per-frame seeking is
+# kept (NOT batch fps decode) because it samples the exact frames OCR reads best: a batch
+# `fps` filter sampled different frames and tanked golden recall 1.00 -> 0.40.
+FRAME_EXTRACT_TIMEOUT_SEC = 20.0
 
 
 class MediaHandle:
@@ -67,9 +77,10 @@ class MediaHandle:
         return pcm, sr
 
     def frames_at(self, times, region=None):
-        """Yield (t_sec, RGB np.ndarray) for each source-relative time, optionally cropped
-        to a fractional region {x,y,w,h}. Streams one frame per ffmpeg call (input-seek);
-        never buffers the whole VOD."""
+        """Yield (t_sec, RGB np.ndarray) for each source-relative time, optionally cropped to
+        a fractional region {x,y,w,h}. One ffmpeg input-seek per frame (the exact frames OCR
+        reads best); each call is bounded by FRAME_EXTRACT_TIMEOUT_SEC so a stalled seek is
+        killed and skipped instead of hanging the whole pass. Never buffers the whole VOD."""
         import io
         import subprocess
 
@@ -85,11 +96,18 @@ class MediaHandle:
             vf = ["-vf", f"crop={w}:{h}:{x}:{y}"]
 
         for t in times:
-            out = subprocess.run(
-                ["ffmpeg", "-v", "error", "-ss", f"{float(t):.3f}", "-i", self.source_path,
-                 *vf, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
-                capture_output=True,
-            )
+            try:
+                out = subprocess.run(
+                    ["ffmpeg", "-v", "error", "-ss", f"{float(t):.3f}", "-i", self.source_path,
+                     *vf, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+                    capture_output=True, timeout=FRAME_EXTRACT_TIMEOUT_SEC,
+                )
+            except subprocess.TimeoutExpired:
+                # ffmpeg stalled on this seek (run() kills it); skip the frame, keep going so
+                # one bad spot can't hang the whole pass (the freeze we hit on rec34).
+                log.warning("frames_at: ffmpeg stalled >%.0fs at t=%.3f in %s — skipped",
+                            FRAME_EXTRACT_TIMEOUT_SEC, float(t), self.source_path)
+                continue
             if not out.stdout:
                 continue  # no frame at this time (e.g. past EOF) — skip, don't crash
             try:
